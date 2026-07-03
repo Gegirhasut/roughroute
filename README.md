@@ -126,10 +126,11 @@ entry look stale and triggers a one-time full rebuild on the next run — that
 format.
 
 Per region that does need building, strictly in order: probe the `.pbf`
-size (HEAD request) and **abort the whole run** if it exceeds an 800 MB hard
+size (HEAD request) and **abort the whole run** if it exceeds a 1.2 GB hard
 safety ceiling (a blunt guard against an accidentally huge region —
-continent/country-scale extracts — derailing an unattended run; an unknown
-size also aborts, since the check can't be skipped) → check disk headroom
+continent/country-scale extracts — derailing an unattended run; raised from
+800 MB to admit Austria as a CI RAM-limit test, `docs/DECISIONS.md` D22; an
+unknown size also aborts, since the check can't be skipped) → check disk headroom
 (aborts if a download could fill the disk) → download the `.pbf` to scratch
 → build the `.graph` → verify it (re-load from disk + a trivial route in
 both profiles) → **delete the `.pbf`** — sources are never accumulated.
@@ -164,13 +165,15 @@ versus the v2 sizes recorded when M4/M5 first built them — see
 `docs/DECISIONS.md` D19 for the full before/after table and the real-data
 proof that routes are byte-for-byte unchanged.)
 
-Slovenia is the largest region built in this environment — a mid-size
-scaling test (a single moderate country, well under the 500 MB target and
-the 800 MB hard ceiling). A larger attempt (Austria, 803.1 MB pbf) was
-**OOM-killed on this dev VM's 5.8 GB RAM** partway through building and was
-dropped rather than pursued further (`docs/DECISIONS.md` D18) — a real
-memory constraint of this dev machine, not a code defect; `roughroute batch`
-has no RAM gate today, only disk gates.
+Slovenia (~309 MB pbf) is the largest region built **locally**; bigger
+countries build on the CI runner (~16 GB RAM), not the dev VM. Austria
+(803.1 MB pbf) was **OOM-killed on this dev VM's 5.8 GB RAM** partway through
+building (`docs/DECISIONS.md` D18) — a real memory constraint of this dev
+machine, not a code defect. It's now added back as a deliberate **CI
+RAM-limit test** (D22): the size ceiling was raised 800 MB → 1.2 GB to admit
+it, and the per-region peak-RSS log will show whether the runner has the
+headroom, or where the wall is. Build Austria on CI only, never locally.
+`roughroute batch` still has no RAM gate — only disk gates.
 
 ### Publishing (automated)
 

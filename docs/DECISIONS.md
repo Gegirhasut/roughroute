@@ -419,7 +419,8 @@ sends no length) and **aborts the whole run** with a clear message when
 short. Verification = re-read the written file, `Graph::from_bytes`, and a
 trivial route between two node coordinates of the loaded graph.
 
-**Hard size ceiling (added 2026-07-03, `HARD_MAX_PBF_BYTES = 800_000_000`):**
+**Hard size ceiling (added 2026-07-03 at `HARD_MAX_PBF_BYTES = 800_000_000`;
+raised to `1_200_000_000` for the Austria test, D22):**
 checked *before* the headroom math, on the same HEAD-probed
 `Content-Length` — a technically-fitting-but-huge extract (a continent, a
 country the size of the US) would otherwise pass the headroom check on a
@@ -758,6 +759,29 @@ runtime** (spec §2.1), no new dependency.
 Re-measuring already-published regions requires a rebuild (they skip under
 `--trust-index`): dispatch the workflow with `force=all`, or the next new
 region logs its peak on its first build.
+
+## D22. Raise the `.pbf` ceiling to 1.2 GB for the Austria RAM-limit test (2026-07-04)
+
+**Context.** Austria was dropped back in D18: its ~803 MB `.pbf` OOM-killed
+graph construction on the 5.8 GB dev VM, and the `HARD_MAX_PBF_BYTES` ceiling,
+briefly raised to 1.2 GB for that attempt, was **reverted to 800 MB** because
+its only justification (admitting Austria) had failed. Now the picture is
+different: builds run on the ~16 GB CI runner (D20), and `batch` logs peak RSS
+per region (D21), so we can attempt Austria as a *measured probe* rather than
+a blind guess — if it builds we see its peak, if it OOMs we see where the wall
+is on the runner.
+
+**Decision.** Re-raise `HARD_MAX_PBF_BYTES` from `800_000_000` to
+`1_200_000_000` (1.2 GB) so Austria's ~803 MB `.pbf` passes the size gate, and
+add `austria` to `regions.toml`. This is a **deliberate raise for the CI
+RAM-limit test**, not a general loosening: it only relaxes the *size* gate.
+The `df` disk-headroom check (2× pbf + 1 GiB floor) is unchanged and still
+protects disk, and there is still no RAM gate — exposing the RAM wall is the
+whole point of the test. Austria builds **on CI only**; it is not built on the
+dev VM, where it OOMs. Note the 800 MB → 1.2 GB history: D18 raised-then-
+reverted it on 2026-07-03; this D22 re-raise (2026-07-04) is justified by the
+runner's headroom, not the VM's. If Austria OOMs the runner too, the honest
+follow-up is to drop it again and revisit only with a streaming build.
 
 ## Known limitations (deliberate v1 scope)
 

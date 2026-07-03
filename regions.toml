@@ -20,11 +20,9 @@ id = "andorra"
 name = "Andorra"
 pbf_url = "https://download.geofabrik.de/europe/andorra-latest.osm.pbf"
 
-# Mid-size scaling test (2026-07-03): .pbf probed at 309.6 MB, comfortably
-# under the 800 MB hard safety ceiling in crates/cli/src/batch.rs. This is
-# the largest region built in this environment — an attempt at Austria
-# (803.1 MB pbf) was OOM-killed on this dev VM's 5.8 GB RAM (see
-# docs/DECISIONS.md D18); dropped rather than pursued further.
+# Mid-size scaling test (2026-07-03): .pbf ~309.6 MB — the first region past
+# the tiny islands. Larger countries (Switzerland, Kenya, and now Austria)
+# build on the CI runner, not locally.
 [[region]]
 id = "slovenia"
 name = "Slovenia"
@@ -69,3 +67,14 @@ pbf_url = "https://download.geofabrik.de/europe/iceland-latest.osm.pbf"
 id = "montenegro"
 name = "Montenegro"
 pbf_url = "https://download.geofabrik.de/europe/montenegro-latest.osm.pbf"
+
+# CI RAM-limit test (2026-07-04): Austria's pbf is ~803 MB and previously
+# OOM-killed during graph construction on the 5.8 GB dev VM (docs/DECISIONS.md
+# D18/D22). Added to probe whether the ~16 GB CI runner has the headroom, now
+# that batch logs peak RSS per region (D21). Build it on CI ONLY, never
+# locally. Admitting it needed the pbf size gate raised 800 MB → 1.2 GB
+# (net.rs HARD_MAX_PBF_BYTES); the disk-headroom check is unchanged.
+[[region]]
+id = "austria"
+name = "Austria"
+pbf_url = "https://download.geofabrik.de/europe/austria-latest.osm.pbf"

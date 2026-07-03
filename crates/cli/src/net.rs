@@ -22,7 +22,12 @@ pub(crate) const UNKNOWN_PBF_ESTIMATE_BYTES: u64 = 5 << 30; // 5 GiB, deliberate
 /// blunt guard against an accidentally huge region (a continent, a whole
 /// country the size of the US) eating an unattended run's disk or wall-clock
 /// budget; raise it deliberately if a legitimately larger source is added.
-pub(crate) const HARD_MAX_PBF_BYTES: u64 = 800_000_000; // 800 MB (decimal)
+///
+/// Raised 800 MB → 1.2 GB (2026-07-04) to admit Austria (~803 MB pbf) as a
+/// deliberate CI RAM-limit test on the ~16 GB runner (docs/DECISIONS.md D22).
+/// This only relaxes the *size* gate; the `df` disk-headroom check below is
+/// unchanged, and there is still no RAM gate — that's the point of the test.
+pub(crate) const HARD_MAX_PBF_BYTES: u64 = 1_200_000_000; // 1.2 GB (decimal)
 
 /// A timeout-configured agent for all build-time downloads. `timeout_read`
 /// (no data for this long → fail) is the real protection against a stalled
@@ -147,10 +152,11 @@ mod tests {
     }
 
     #[test]
-    fn hard_max_pbf_ceiling_is_800mb() {
+    fn hard_max_pbf_ceiling_is_1_2gb() {
         // Pin the constant so a casual edit doesn't silently loosen the
-        // safety gate.
-        assert_eq!(HARD_MAX_PBF_BYTES, 800_000_000);
+        // safety gate. Raised 800 MB → 1.2 GB to admit Austria for the CI
+        // RAM-limit test (docs/DECISIONS.md D22).
+        assert_eq!(HARD_MAX_PBF_BYTES, 1_200_000_000);
     }
 
     #[test]

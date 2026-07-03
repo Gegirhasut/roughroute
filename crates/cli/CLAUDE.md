@@ -51,7 +51,7 @@ missing or unparseable `index.json` degrades to "no cached entries" in
 either mode — never silently trusted, always a full rebuild.
 
 For a region that does need building, strictly: **hard size ceiling**
-(HEAD-probed `.pbf` size vs `HARD_MAX_PBF_BYTES = 800_000_000`; an unknown
+(HEAD-probed `.pbf` size vs `HARD_MAX_PBF_BYTES = 1_200_000_000`; an unknown
 size also aborts — the whole run stops, not just the region) →
 disk-headroom check (`df -P -B1`; also aborts the run when short) →
 download → build → verify (re-load written bytes + trivial routes) →
@@ -60,9 +60,11 @@ CLAUDE.md disk rules, enforced in code). Writes `index.json` (D17 schema:
 url/bytes/sha256/nodes/edges/bbox/format_version). Publishing is manual/CI
 via `gh release create` (see README); no credentials here.
 
-**No RAM gate exists** — only the disk checks above. An attempt to raise
-the ceiling to 1.2 GB and build Austria (803.1 MB pbf) was OOM-killed on a
-5.8 GB-RAM dev VM (D18); dropped, ceiling reverted to 800 MB. If a future
+**No RAM gate exists** — only the disk checks above. Austria (803.1 MB pbf)
+OOM-killed graph construction on the 5.8 GB-RAM dev VM (D18): the ceiling was
+raised to 1.2 GB then reverted to 800 MB when that attempt failed. It's now
+re-raised to 1.2 GB (D22) to retry Austria **on the ~16 GB CI runner only**,
+as a measured RAM-limit probe — never build Austria locally. If a future
 region needs more than the current ceiling admits, check available memory
 first, not just disk. To make that concrete, `batch` now **measures peak
 RSS per region** (`mem.rs`, D21) and prints it in each region's `ok:` log
