@@ -1,0 +1,26 @@
+[package]
+name = "roughroute-wasm"
+description = "wasm-bindgen wrapper around roughroute-core (spec §6.3)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+# HARD CONSTRAINT: core + JS glue only. If osmpbf or any fs/network crate
+# appears in `cargo tree -p roughroute-wasm --target wasm32-unknown-unknown`,
+# the dependency graph is broken.
+[dependencies]
+roughroute-core.workspace = true
+wasm-bindgen = "0.2"
+serde.workspace = true
+serde-wasm-bindgen = "0.6"
+
+[dev-dependencies]
+serde_json.workspace = true
+
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+wasm-bindgen-test = "0.3"
+js-sys = "0.3"
