@@ -16,7 +16,12 @@
 #![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 #![deny(missing_docs)]
 
+pub mod format;
 pub mod geo;
+pub mod graph;
 pub mod profile;
 
+mod grid;
+
+pub use graph::{BBox, Edge, Graph, GraphError};
 pub use profile::Profile;
