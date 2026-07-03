@@ -20,8 +20,10 @@ pub mod format;
 pub mod geo;
 pub mod graph;
 pub mod profile;
+pub mod router;
 
 mod grid;
 
 pub use graph::{BBox, Edge, Graph, GraphError};
 pub use profile::Profile;
+pub use router::{RouteError, RouteOptions, RouteResult, Router};
