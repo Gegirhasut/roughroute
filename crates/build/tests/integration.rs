@@ -258,6 +258,61 @@ fn cyprus_fixture_end_to_end() {
     let (g2, _) = build_graph(&ways, &coords).unwrap();
     assert_eq!(bytes, g2.to_bytes());
 
+    // --- F10 heals the documented D14 case (M5) ---
+    // The M4 report used the CLI example waypoint (34.7071, 33.0226): with
+    // kept-node snapping the route started from a node ~41 m away (~55 m
+    // from where v1 had started). Edge snapping must land on the road
+    // surface itself, closer than the kept node, and route fine.
+    let d14 = [34.7071, 33.0226];
+    let (_, node_m) = graph.nearest_node(d14[0], d14[1], 1_000.0).unwrap();
+    let (road_pt, road_m) = graph.nearest_road(d14[0], d14[1], 1_000.0).unwrap();
+    eprintln!("D14 waypoint: kept-node snap {node_m:.1} m, edge snap {road_m:.1} m");
+    assert!(road_m <= node_m);
+    assert!(road_m < 30.0, "edge snap should be ~the perpendicular: {road_m:.1} m");
+    assert!(node_m > road_m + 5.0, "the case must still exercise the D14 gap");
+    let route = router(&graph, Profile::Car).route(&[d14, [34.6841, 33.0379]]).unwrap();
+    assert!(!route.fallback);
+    // The car route starts at the car-road projection: never farther than
+    // the kept node M4 started from (and usually at road_pt itself, unless
+    // the closest road happens to be foot-only).
+    let start_m = haversine_m(route.line[0][0], route.line[0][1], d14[0], d14[1]);
+    eprintln!("D14 waypoint: car route now starts {start_m:.1} m from the query (road at {:.1} m)", road_m);
+    assert!(start_m <= node_m);
+    let _ = road_pt;
+
+    // And the worst mid-chain point in the whole island: the collapsed
+    // geometry vertex farthest from every kept node. In M4 a waypoint there
+    // was SnapTooFar (> 200 m from any node); with F10 it snaps within
+    // centimeters and routes.
+    let mut worst: Option<([f64; 2], f64)> = None;
+    for n in 0..graph.node_count() {
+        for e in graph.edges_from(n) {
+            // Canonical direction only (the twin shares the same geometry).
+            if e.access & Profile::Car.mask() == 0 || e.target <= n {
+                continue;
+            }
+            for p in graph.edge_geometry(e) {
+                let lat = f64::from(p[0]) / 1e7;
+                let lon = f64::from(p[1]) / 1e7;
+                // Cheap pre-filter: only measure vertices, keep the farthest.
+                if let Some((_, d)) = graph.nearest_node(lat, lon, 5_000.0) {
+                    if worst.is_none() || d > worst.unwrap().1 {
+                        worst = Some(([lat, lon], d));
+                    }
+                }
+            }
+        }
+    }
+    let (mid_chain, node_dist) = worst.unwrap();
+    let (_, road_dist) = graph.nearest_road(mid_chain[0], mid_chain[1], 1_000.0).unwrap();
+    eprintln!(
+        "worst mid-chain vertex {mid_chain:?}: kept node {node_dist:.1} m away, road {road_dist:.3} m"
+    );
+    assert!(node_dist > 200.0, "must reproduce the old SnapTooFar case");
+    assert!(road_dist < 0.5, "F10 must snap onto the road itself");
+    let route = router(&graph, Profile::Car).route(&[mid_chain, [35.1739, 33.3643]]).unwrap();
+    assert!(!route.line.is_empty() && route.meters > 0.0);
+
     // M4 shape regression on real data: with waypoints at kept-node
     // coordinates (so both graphs snap identically), the collapsed graph must
     // return point-for-point the same polyline as the uncollapsed topology.

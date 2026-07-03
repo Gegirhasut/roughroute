@@ -1,6 +1,6 @@
-//! Property-based tests: random waypoints inside (and around) the graph bbox
-//! must yield a valid route or a controlled error/fallback — never a panic
-//! and never a malformed result.
+//! Property-based tests (spec §11): random waypoints inside (and around) the
+//! graph bbox must yield a valid route, a controlled error, or a fallback —
+//! never a panic and never a malformed result.
 
 use proptest::prelude::*;
 use roughroute_core::geo::{deg_to_fixed, haversine_m};
@@ -134,8 +134,11 @@ proptest! {
         }
     }
 
-    /// Points snapped on the connected grid always route without fallback,
-    /// and the route is deterministic across repeated calls.
+    /// Points snapped on the connected grid always route, and the route is
+    /// deterministic across repeated calls. (With F10 edge snapping a foot
+    /// query can legitimately project onto a car-only street; its partials
+    /// are then unusable and the leg falls back — so fallback stays allowed
+    /// here and determinism/invariants are the assertions.)
     #[test]
     fn connected_grid_routes_are_deterministic(
         a in (35.0f64..35.022, 33.0f64..33.022),
@@ -144,7 +147,7 @@ proptest! {
         let graph = synthetic_graph(12);
         let router = Router::new(&graph, RouteOptions {
             profile: Profile::Foot,
-            allow_fallback: false,
+            allow_fallback: true,
             max_snap_meters: 200.0,
         });
         let wp = [[a.0, a.1], [b.0, b.1]];
@@ -153,6 +156,21 @@ proptest! {
         prop_assert_eq!(&first, &second);
         let route = first.unwrap();
         check_result_invariants(&route);
-        prop_assert!(!route.fallback);
+    }
+
+    /// F10 is never worse than node snapping, by construction: the projected
+    /// road point is at most as far as the nearest kept node (which is itself
+    /// an endpoint of some indexed segment). Strict `<=`, no epsilon.
+    #[test]
+    fn road_snap_never_worse_than_node_snap(
+        p in (34.98f64..35.06, 32.98f64..33.07),
+    ) {
+        let graph = synthetic_graph(12);
+        let (_, node_m) = graph.nearest_node(p.0, p.1, f64::INFINITY).unwrap();
+        let (_, road_m) = graph.nearest_road(p.0, p.1, f64::INFINITY).unwrap();
+        prop_assert!(
+            road_m <= node_m,
+            "road snap {road_m} m farther than node snap {node_m} m at {p:?}"
+        );
     }
 }

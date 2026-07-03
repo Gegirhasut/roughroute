@@ -214,7 +214,7 @@ impl Graph {
             }
         }
 
-        let grid = Grid::build(&nodes, bbox_fixed);
+        let grid = Grid::build(&nodes, &offsets, &edges, &geometry, bbox_fixed);
         Ok(Graph { flags, bbox_fixed, nodes, offsets, edges, geometry, grid })
     }
 
@@ -301,13 +301,95 @@ impl Graph {
         &self.geometry[edge.geo_off as usize..edge.geo_off as usize + edge.geo_len as usize]
     }
 
-    /// Nearest graph node to `(lat, lon)` (degrees) within roughly
-    /// `max_meters`, as `(node_index, haversine_meters)`.
+    /// Nearest graph node to `(lat, lon)` (degrees), as
+    /// `(node_index, haversine_meters)`.
     ///
-    /// Returns `None` when no node exists within the search bound. Distance
+    /// Since format v2 only *kept* nodes — junctions, dead-ends and similar
+    /// (`docs/DECISIONS.md` D14) — are snap targets; collapsed intermediate
+    /// points are not. `max_meters` bounds the search effort; the returned
+    /// distance may exceed it (the caller compares against its own cutoff),
+    /// and `None` means nothing was found within the search bound. Distance
     /// ties break toward the smaller node index (determinism F9).
     pub fn nearest_node(&self, lat: f64, lon: f64, max_meters: f64) -> Option<(u32, f64)> {
         self.grid.nearest(&self.nodes, lat, lon, max_meters)
+    }
+
+    /// Nearest point *on a road* to `(lat, lon)` (degrees), as
+    /// `([lat, lon], haversine_meters)` — the F10 edge-snapping query
+    /// (`docs/DECISIONS.md` D15), over roads of every profile.
+    ///
+    /// The result is the perpendicular projection onto the closest shape
+    /// segment of any edge (collapsed intermediate geometry included), so it
+    /// is never farther than [`Graph::nearest_node`]'s result. `max_meters`
+    /// bounds the search effort exactly as in `nearest_node`.
+    pub fn nearest_road(&self, lat: f64, lon: f64, max_meters: f64) -> Option<([f64; 2], f64)> {
+        self.road_snap(lat, lon, max_meters, ACCESS_ALL).map(|s| (s.point, s.meters))
+    }
+
+    /// Full edge-snap result for the router (edge, segment, `t`, point,
+    /// distance), restricted to edges matching `access_mask` so a profile
+    /// never snaps onto a road it cannot use (D16).
+    pub(crate) fn road_snap(
+        &self,
+        lat: f64,
+        lon: f64,
+        max_meters: f64,
+        access_mask: u8,
+    ) -> Option<crate::grid::RoadSnap> {
+        self.grid.nearest_segment(
+            &self.nodes,
+            &self.offsets,
+            &self.edges,
+            &self.geometry,
+            lat,
+            lon,
+            max_meters,
+            access_mask,
+        )
+    }
+
+    /// Source node of global edge `edge_index` (the node whose CSR range
+    /// contains it).
+    pub(crate) fn edge_source(&self, edge_index: u32) -> u32 {
+        crate::grid::edge_source(&self.offsets, edge_index)
+    }
+
+    /// Shape point `k` of edge `edge_index` in travel order, fixed-point:
+    /// `k = 0` is the source node, `1..=geo_len` the intermediate geometry,
+    /// `geo_len + 1` the target node.
+    pub(crate) fn shape_point_fixed(&self, edge_index: u32, k: u32) -> [i32; 2] {
+        crate::grid::shape_point(
+            &self.nodes,
+            &self.offsets,
+            &self.edges,
+            &self.geometry,
+            edge_index,
+            k,
+        )
+    }
+
+    /// Same shape point in `[lat, lon]` degrees.
+    pub(crate) fn shape_point_latlon(&self, edge_index: u32, k: u32) -> [f64; 2] {
+        let [lat, lon] = self.shape_point_fixed(edge_index, k);
+        [geo::fixed_to_deg(lat), geo::fixed_to_deg(lon)]
+    }
+
+    /// Distance in decimeters from the edge's source node to the position
+    /// `(seg, t)` along its shape, clamped into `[0, length_dm]` so the two
+    /// partials of a snap always sum exactly to `length_dm`
+    /// (`docs/DECISIONS.md` D16).
+    pub(crate) fn distance_along_dm(&self, edge_index: u32, seg: u16, t: f64) -> u64 {
+        let mut meters = 0.0;
+        let mut prev = self.shape_point_latlon(edge_index, 0);
+        for k in 0..u32::from(seg) {
+            let next = self.shape_point_latlon(edge_index, k + 1);
+            meters += geo::haversine_m(prev[0], prev[1], next[0], next[1]);
+            prev = next;
+        }
+        let end = self.shape_point_latlon(edge_index, u32::from(seg) + 1);
+        meters += t * geo::haversine_m(prev[0], prev[1], end[0], end[1]);
+        let length = u64::from(self.edges[edge_index as usize].length_dm);
+        ((meters * 10.0).round() as u64).min(length)
     }
 }
 
