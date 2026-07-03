@@ -1,0 +1,224 @@
+//! `roughroute` — the command-line tool (spec §6.5).
+//!
+//! Two subcommands: `build` (ahead-of-time `.osm.pbf` → `.graph`
+//! preprocessing) and `route` (offline routing over a `.graph`, exported as
+//! contract JSON, GeoJSON, or GPX). Route output goes to stdout; diagnostics
+//! go to stderr.
+
+mod export;
+
+use std::error::Error;
+use std::fs;
+use std::path::PathBuf;
+
+use clap::{Parser, Subcommand, ValueEnum};
+use roughroute_build::{build_graph, read_road_network};
+use roughroute_core::{Graph, Profile, RouteOptions, Router};
+
+#[derive(Parser)]
+#[command(
+    name = "roughroute",
+    about = "Fast offline OSM mini-router: build road graphs and route over them.\n\
+             Map data © OpenStreetMap contributors (ODbL)."
+)]
+struct Cli {
+    #[command(subcommand)]
+    command: Command,
+}
+
+#[derive(Subcommand)]
+enum Command {
+    /// Build a .graph road network from an OSM extract (dev/CI preprocessing).
+    Build {
+        /// Path to a local .osm.pbf extract.
+        #[arg(long, conflicts_with = "pbf_url", required_unless_present = "pbf_url")]
+        pbf: Option<PathBuf>,
+        /// URL of a .osm.pbf to download first (build-time only; the routing
+        /// runtime never touches the network).
+        #[arg(long)]
+        pbf_url: Option<String>,
+        /// Output .graph path.
+        #[arg(long)]
+        out: PathBuf,
+        /// Profiles to include, comma-separated (ways usable by none are dropped).
+        #[arg(long, value_delimiter = ',', default_values = ["car", "foot"])]
+        profiles: Vec<CliProfile>,
+    },
+    /// Build a route over a .graph and print it to stdout.
+    Route {
+        /// Path to the .graph file produced by `roughroute build`.
+        #[arg(long)]
+        graph: PathBuf,
+        /// Routing profile.
+        #[arg(long, default_value = "car")]
+        profile: CliProfile,
+        /// Waypoint as `lat,lon` (repeat at least twice, in visit order).
+        #[arg(long = "via", required = true, num_args = 1..)]
+        via: Vec<String>,
+        /// Output format.
+        #[arg(long, default_value = "json")]
+        format: Format,
+        /// Maximum waypoint-to-road snapping distance in meters.
+        #[arg(long, default_value_t = 200.0)]
+        max_snap_meters: f64,
+        /// Fail instead of bridging unreachable legs with a straight line.
+        #[arg(long)]
+        no_fallback: bool,
+    },
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+enum CliProfile {
+    Car,
+    Foot,
+}
+
+impl From<CliProfile> for Profile {
+    fn from(p: CliProfile) -> Profile {
+        match p {
+            CliProfile::Car => Profile::Car,
+            CliProfile::Foot => Profile::Foot,
+        }
+    }
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+enum Format {
+    Json,
+    Geojson,
+    Gpx,
+}
+
+fn main() {
+    if let Err(err) = run(Cli::parse()) {
+        eprintln!("error: {err}");
+        std::process::exit(1);
+    }
+}
+
+fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
+    match cli.command {
+        Command::Build { pbf, pbf_url, out, profiles } => cmd_build(pbf, pbf_url, out, &profiles),
+        Command::Route { graph, profile, via, format, max_snap_meters, no_fallback } => {
+            cmd_route(&graph, profile, &via, format, max_snap_meters, no_fallback)
+        }
+    }
+}
+
+fn cmd_build(
+    pbf: Option<PathBuf>,
+    pbf_url: Option<String>,
+    out: PathBuf,
+    profiles: &[CliProfile],
+) -> Result<(), Box<dyn Error>> {
+    // Resolve the input: local path, or download to a temp file first.
+    let (pbf_path, temp_download) = match (pbf, pbf_url) {
+        (Some(path), _) => (path, None),
+        (None, Some(url)) => {
+            eprintln!("downloading {url} …");
+            let path =
+                std::env::temp_dir().join(format!("roughroute-{}.osm.pbf", std::process::id()));
+            let response = ureq::get(&url).call()?;
+            let mut file = fs::File::create(&path)?;
+            std::io::copy(&mut response.into_reader(), &mut file)?;
+            (path.clone(), Some(path))
+        }
+        (None, None) => unreachable!("clap enforces --pbf or --pbf-url"),
+    };
+
+    let keep_mask: u8 = profiles.iter().map(|&p| Profile::from(p).mask()).fold(0, |a, m| a | m);
+
+    let (mut ways, coords) = read_road_network(&pbf_path)?;
+    // `--profiles` narrows the graph to ways usable by the selected profiles.
+    for way in &mut ways {
+        way.access &= keep_mask;
+    }
+    let (graph, stats) = build_graph(&ways, &coords)?;
+    fs::write(&out, graph.to_bytes())?;
+
+    if let Some(path) = temp_download {
+        let _ = fs::remove_file(path); // best-effort cleanup
+    }
+
+    let bb = graph.bbox();
+    eprintln!(
+        "wrote {}: {} nodes, {} directed edges, bbox [{:.4}, {:.4}] – [{:.4}, {:.4}]",
+        out.display(),
+        graph.node_count(),
+        graph.edge_count(),
+        bb.min_lat,
+        bb.min_lon,
+        bb.max_lat,
+        bb.max_lon,
+    );
+    eprintln!(
+        "  ways used: {}, segments dropped (missing nodes): {}, duplicate edges merged: {}",
+        stats.ways_used, stats.segments_dropped_missing_node, stats.duplicate_edges_merged,
+    );
+    Ok(())
+}
+
+fn cmd_route(
+    graph_path: &PathBuf,
+    profile: CliProfile,
+    via: &[String],
+    format: Format,
+    max_snap_meters: f64,
+    no_fallback: bool,
+) -> Result<(), Box<dyn Error>> {
+    let waypoints: Vec<[f64; 2]> =
+        via.iter().map(|s| parse_latlon(s)).collect::<Result<_, _>>()?;
+
+    let bytes = fs::read(graph_path)?;
+    let graph = Graph::from_bytes(&bytes)?;
+    let router = Router::new(
+        &graph,
+        RouteOptions {
+            profile: profile.into(),
+            allow_fallback: !no_fallback,
+            max_snap_meters,
+        },
+    );
+    let route = router.route(&waypoints)?;
+
+    let rendered = match format {
+        Format::Json => export::to_contract_json(&route)?,
+        Format::Geojson => export::to_geojson(&route)?,
+        Format::Gpx => export::to_gpx(&route),
+    };
+    println!("{rendered}");
+    Ok(())
+}
+
+/// Parse a `--via` argument: `lat,lon` in degrees (contract order, D9).
+fn parse_latlon(s: &str) -> Result<[f64; 2], String> {
+    let err = || format!("invalid --via '{s}': expected 'lat,lon' (e.g. 34.7071,33.0226)");
+    let (lat, lon) = s.split_once(',').ok_or_else(err)?;
+    let lat: f64 = lat.trim().parse().map_err(|_| err())?;
+    let lon: f64 = lon.trim().parse().map_err(|_| err())?;
+    if !(-90.0..=90.0).contains(&lat) || !(-180.0..=180.0).contains(&lon) {
+        return Err(format!("--via '{s}' out of range: lat in [-90,90], lon in [-180,180]"));
+    }
+    Ok([lat, lon])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cli_definition_is_consistent() {
+        use clap::CommandFactory;
+        Cli::command().debug_assert();
+    }
+
+    #[test]
+    fn parse_latlon_accepts_contract_order_and_rejects_junk() {
+        assert_eq!(parse_latlon("34.7071,33.0226").unwrap(), [34.7071, 33.0226]);
+        assert_eq!(parse_latlon(" 34.7 , 33.0 ").unwrap(), [34.7, 33.0]);
+        assert!(parse_latlon("34.7071").is_err());
+        assert!(parse_latlon("a,b").is_err());
+        assert!(parse_latlon("91.0,33.0").is_err());
+        assert!(parse_latlon("34.0,181.0").is_err());
+    }
+}

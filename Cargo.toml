@@ -2,6 +2,8 @@
 resolver = "2"
 members = [
     "crates/core",
+    "crates/build",
+    "crates/cli",
 ]
 
 [workspace.package]
@@ -13,6 +15,12 @@ rust-version = "1.85"
 
 [workspace.dependencies]
 roughroute-core = { path = "crates/core" }
+roughroute-build = { path = "crates/build" }
+osmpbf = "0.3"
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+ureq = "2"
 proptest = "1"
 
 [profile.release]

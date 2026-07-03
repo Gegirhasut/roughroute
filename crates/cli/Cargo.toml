@@ -1,0 +1,21 @@
+[package]
+name = "roughroute-cli"
+description = "The roughroute command-line tool: build .graph files and route over them"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "roughroute"
+path = "src/main.rs"
+
+[dependencies]
+roughroute-core.workspace = true
+roughroute-build.workspace = true
+clap.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+# Build-time-only downloads for `build --pbf-url` (spec §3); the routing
+# runtime never touches the network.
+ureq.workspace = true

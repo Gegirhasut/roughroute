@@ -1,0 +1,16 @@
+[package]
+name = "roughroute-build"
+description = "Ahead-of-time preprocessor: .osm.pbf -> roughroute .graph"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+# The ONLY crate allowed to depend on osmpbf (spec §5.1); never compiled into
+# the WASM/native phone runtime.
+[dependencies]
+roughroute-core.workspace = true
+osmpbf.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
