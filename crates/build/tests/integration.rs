@@ -170,17 +170,22 @@ fn golden_determinism_same_input_identical_output() {
     // Golden header snapshot: pin the on-disk prefix so accidental format
     // drift fails loudly. The M4 collapse swallows interior nodes 4 (main
     // street) and 30, 31 (motorway shape): 8 kept nodes, 8 road segments →
-    // 16 directed edges, 3 geometry points.
+    // 16 directed edges, 3 geometry points. Since v3 (D19) the geometry
+    // section is variable-length delta-varint bytes, not geo_count × 8, so
+    // the total length check reads the declared geo_bytes rather than
+    // recomputing it from the point count.
     assert_eq!(&bytes[0..4], b"RRG1");
-    assert_eq!(u16::from_le_bytes([bytes[4], bytes[5]]), 2); // format version
+    assert_eq!(u16::from_le_bytes([bytes[4], bytes[5]]), 3); // format version
     assert_eq!(u16::from_le_bytes([bytes[6], bytes[7]]), 0); // flags
     let node_count = u32::from_le_bytes(bytes[8..12].try_into().unwrap());
     let edge_count = u32::from_le_bytes(bytes[12..16].try_into().unwrap());
     let geo_count = u32::from_le_bytes(bytes[32..36].try_into().unwrap());
+    let geo_bytes = u32::from_le_bytes(bytes[36..40].try_into().unwrap());
     assert_eq!(node_count, 8);
     assert_eq!(edge_count, 16);
     assert_eq!(geo_count, 3);
-    assert_eq!(bytes.len(), 40 + 8 * 8 + 9 * 4 + 16 * 16 + 3 * 8);
+    assert!(geo_bytes > 0 && (geo_bytes as usize) < 3 * 8, "delta encoding should beat 8 bytes/point");
+    assert_eq!(bytes.len(), 40 + 8 * 8 + 9 * 4 + 16 * 16 + geo_bytes as usize);
 
     // Repeated routing over one loaded graph: identical results.
     let graph = Graph::from_bytes(&bytes).unwrap();
