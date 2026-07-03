@@ -22,13 +22,16 @@ fn tiny_graph_bytes() -> Vec<u8> {
         [deg_to_fixed(35.02), deg_to_fixed(33.00)],
     ];
     let offsets = vec![0, 1, 3, 4];
-    let edges = vec![
-        Edge { target: 1, length_dm: 11120, access: ACCESS_ALL },
-        Edge { target: 0, length_dm: 11120, access: ACCESS_ALL },
-        Edge { target: 2, length_dm: 11120, access: ACCESS_ALL },
-        Edge { target: 1, length_dm: 11120, access: ACCESS_ALL },
-    ];
-    Graph::from_parts(nodes, offsets, edges).unwrap().to_bytes()
+    let mk = |target| Edge {
+        target,
+        length_dm: 11120,
+        geo_off: 0,
+        geo_len: 0,
+        reversed: false,
+        access: ACCESS_ALL,
+    };
+    let edges = vec![mk(1), mk(0), mk(2), mk(1)];
+    Graph::from_parts(nodes, offsets, edges, vec![]).unwrap().to_bytes()
 }
 
 #[wasm_bindgen_test]

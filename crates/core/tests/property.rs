@@ -56,8 +56,16 @@ fn synthetic_graph(size: u32) -> Graph {
             f64::from(blon) / 1e7,
         );
         let length_dm = ((m * 10.0).round() as u32).max(1);
-        directed.push((a, Edge { target: b, length_dm, access }));
-        directed.push((b, Edge { target: a, length_dm, access }));
+        let mk = |target| Edge {
+            target,
+            length_dm,
+            geo_off: 0,
+            geo_len: 0,
+            reversed: false,
+            access,
+        };
+        directed.push((a, mk(b)));
+        directed.push((b, mk(a)));
     }
     directed.sort_by_key(|(s, e)| (*s, e.target));
     let mut offsets = vec![0u32; nodes.len() + 1];
@@ -68,7 +76,7 @@ fn synthetic_graph(size: u32) -> Graph {
         offsets[i] += offsets[i - 1];
     }
     let edges = directed.into_iter().map(|(_, e)| e).collect();
-    Graph::from_parts(nodes, offsets, edges).expect("synthetic graph is valid")
+    Graph::from_parts(nodes, offsets, edges, vec![]).expect("synthetic graph is valid")
 }
 
 fn check_result_invariants(route: &roughroute_core::RouteResult) {

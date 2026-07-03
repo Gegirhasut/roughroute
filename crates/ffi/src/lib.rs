@@ -140,9 +140,16 @@ mod tests {
             [deg_to_fixed(35.02), deg_to_fixed(33.00)],
         ];
         let offsets = vec![0, 1, 3, 4];
-        let mk = |target| Edge { target, length_dm: 11120, access: ACCESS_ALL };
+        let mk = |target| Edge {
+            target,
+            length_dm: 11120,
+            geo_off: 0,
+            geo_len: 0,
+            reversed: false,
+            access: ACCESS_ALL,
+        };
         let edges = vec![mk(1), mk(0), mk(2), mk(1)];
-        roughroute_core::Graph::from_parts(nodes, offsets, edges).unwrap().to_bytes()
+        roughroute_core::Graph::from_parts(nodes, offsets, edges, vec![]).unwrap().to_bytes()
     }
 
     #[test]

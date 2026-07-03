@@ -57,12 +57,18 @@ fn router(graph: &Graph, profile: Profile) -> Router<'_> {
 }
 
 /// Spec §11 invariants on a route between `from`/`to` waypoints.
-fn assert_route_invariants(route: &RouteResult, waypoints: &[[f64; 2]], max_snap: f64) {
-    // The line is connected: adjacent points within a reasonable step (our
-    // town's longest single segment is well under 1 km).
+/// `max_step` is the "line is connected" bound: the longest plausible single
+/// edge (consecutive way nodes) for the graph under test.
+fn assert_route_invariants(
+    route: &RouteResult,
+    waypoints: &[[f64; 2]],
+    max_snap: f64,
+    max_step: f64,
+) {
+    // The line is connected: adjacent points within a reasonable step.
     for w in route.line.windows(2) {
         let step = haversine_m(w[0][0], w[0][1], w[1][0], w[1][1]);
-        assert!(step > 0.0 && step < 1_000.0, "disconnected step of {step} m");
+        assert!(step > 0.0 && step < max_step, "disconnected step of {step} m");
     }
     // Endpoints snapped within max_snap_meters of the requested points.
     let first = route.line.first().unwrap();
@@ -92,7 +98,7 @@ fn build_serialize_load_route_end_to_end() {
     for profile in [Profile::Car, Profile::Foot] {
         let route = router(&loaded, profile).route(&waypoints).unwrap();
         assert!(!route.fallback, "{profile:?} should route on roads");
-        assert_route_invariants(&route, &waypoints, 200.0);
+        assert_route_invariants(&route, &waypoints, 200.0, 1_000.0);
     }
 }
 
@@ -105,9 +111,20 @@ fn car_and_foot_take_different_valid_roads_where_it_matters() {
     let foot = router(&graph, Profile::Foot).route(&waypoints).unwrap();
     let car = router(&graph, Profile::Car).route(&waypoints).unwrap();
     assert!(!foot.fallback && !car.fallback);
-    assert_route_invariants(&foot, &waypoints, 200.0);
-    assert_route_invariants(&car, &waypoints, 200.0);
-    assert!(foot.line.len() < car.line.len(), "foot takes the shortcut");
+    assert_route_invariants(&foot, &waypoints, 200.0, 1_000.0);
+    assert_route_invariants(&car, &waypoints, 200.0, 1_000.0);
+    // Foot cuts across the pedestrian shortcut from node id 2; the car must
+    // go around via the junction at id 3.
+    assert!(
+        foot.line.contains(&[35.000, 33.002]) && !foot.line.contains(&[35.000, 33.004]),
+        "foot should use the shortcut via id 2: {:?}",
+        foot.line
+    );
+    assert!(
+        car.line.contains(&[35.000, 33.004]),
+        "car should go around via id 3: {:?}",
+        car.line
+    );
     assert!(foot.meters < car.meters);
 }
 
@@ -117,7 +134,7 @@ fn multipoint_route_is_connected_and_deduped() {
     let waypoints = [[35.002, 33.004], [35.000, 33.000], [34.998, 33.004]];
     let route = router(&graph, Profile::Foot).route(&waypoints).unwrap();
     assert!(!route.fallback);
-    assert_route_invariants(&route, &waypoints, 200.0);
+    assert_route_invariants(&route, &waypoints, 200.0, 1_000.0);
     // Junction dedup: no consecutive duplicates anywhere.
     assert!(route.line.windows(2).all(|w| w[0] != w[1]));
 }
@@ -151,22 +168,59 @@ fn golden_determinism_same_input_identical_output() {
     assert_eq!(Graph::from_bytes(&bytes).unwrap().to_bytes(), bytes);
 
     // Golden header snapshot: pin the on-disk prefix so accidental format
-    // drift fails loudly. Every way node is a graph node in v1 (no
-    // collapse yet): 11 nodes, 11 undirected segments → 22 directed edges.
+    // drift fails loudly. The M4 collapse swallows interior nodes 4 (main
+    // street) and 30, 31 (motorway shape): 8 kept nodes, 8 road segments →
+    // 16 directed edges, 3 geometry points.
     assert_eq!(&bytes[0..4], b"RRG1");
-    assert_eq!(u16::from_le_bytes([bytes[4], bytes[5]]), 1); // format version
+    assert_eq!(u16::from_le_bytes([bytes[4], bytes[5]]), 2); // format version
     assert_eq!(u16::from_le_bytes([bytes[6], bytes[7]]), 0); // flags
     let node_count = u32::from_le_bytes(bytes[8..12].try_into().unwrap());
     let edge_count = u32::from_le_bytes(bytes[12..16].try_into().unwrap());
-    assert_eq!(node_count, 11);
-    assert_eq!(edge_count, 22);
-    assert_eq!(bytes.len(), 32 + 11 * 8 + 12 * 4 + 22 * 12);
+    let geo_count = u32::from_le_bytes(bytes[32..36].try_into().unwrap());
+    assert_eq!(node_count, 8);
+    assert_eq!(edge_count, 16);
+    assert_eq!(geo_count, 3);
+    assert_eq!(bytes.len(), 40 + 8 * 8 + 9 * 4 + 16 * 16 + 3 * 8);
 
     // Repeated routing over one loaded graph: identical results.
     let graph = Graph::from_bytes(&bytes).unwrap();
     let waypoints = [[35.0001, 33.0001], [34.9979, 33.0041]];
     let r = router(&graph, Profile::Foot);
     assert_eq!(r.route(&waypoints), r.route(&waypoints));
+}
+
+/// The key M4 regression guard (spec F6): collapsing degree-2 chains must not
+/// change the *shape* of returned routes. Routes over the collapsed graph —
+/// loaded through its serialized bytes, as the runtime would — must be
+/// point-for-point identical to routes over the uncollapsed (v1-topology)
+/// graph, in both travel directions and for both profiles.
+#[test]
+fn collapse_preserves_route_shape_through_the_binary_format() {
+    let (ways, coords) = town();
+    let (collapsed, stats) =
+        roughroute_build::build_graph_with_options(&ways, &coords, true).unwrap();
+    let (dense, _) = roughroute_build::build_graph_with_options(&ways, &coords, false).unwrap();
+    assert!(stats.interior_nodes_collapsed > 0, "fixture must exercise the collapse");
+    assert!(collapsed.node_count() < dense.node_count());
+    assert!(collapsed.to_bytes().len() < dense.to_bytes().len());
+
+    // Consume the collapsed graph the way the runtime does: via its bytes.
+    let collapsed = Graph::from_bytes(&collapsed.to_bytes()).unwrap();
+
+    // Waypoints at kept-node coordinates (junctions/dead-ends exist in both
+    // graphs, so both snap identically; see docs/DECISIONS.md D14).
+    let main_street = [[35.000, 33.000], [35.000, 33.008]]; // ids 1 -> 5, over swallowed id 4
+    let reversed = [main_street[1], main_street[0]];
+    for waypoints in [main_street, reversed] {
+        for profile in [Profile::Car, Profile::Foot] {
+            let c = router(&collapsed, profile).route(&waypoints).unwrap();
+            let d = router(&dense, profile).route(&waypoints).unwrap();
+            assert_eq!(c.line, d.line, "shape changed: {profile:?} {waypoints:?}");
+            assert_eq!(c.meters, d.meters);
+            assert_eq!(c.fallback, d.fallback);
+            assert!(c.line.len() >= 3, "route must include swallowed geometry");
+        }
+    }
 }
 
 /// Runs only with `cargo test -- --ignored` and only when the Cyprus fixture
@@ -193,7 +247,7 @@ fn cyprus_fixture_end_to_end() {
     for profile in [Profile::Car, Profile::Foot] {
         let route = router(&graph, profile).route(&waypoints).unwrap();
         assert!(!route.fallback, "{profile:?} Limassol→Nicosia must be on-road");
-        assert_route_invariants(&route, &waypoints, 200.0);
+        assert_route_invariants(&route, &waypoints, 200.0, 5_000.0);
         // Straight line is ~63 km; the road route must be at least that and
         // sane (< 3× straight).
         assert!(route.meters > 60_000.0 && route.meters < 200_000.0);
@@ -203,4 +257,20 @@ fn cyprus_fixture_end_to_end() {
     let bytes = graph.to_bytes();
     let (g2, _) = build_graph(&ways, &coords).unwrap();
     assert_eq!(bytes, g2.to_bytes());
+
+    // M4 shape regression on real data: with waypoints at kept-node
+    // coordinates (so both graphs snap identically), the collapsed graph must
+    // return point-for-point the same polyline as the uncollapsed topology.
+    let (dense, _) =
+        roughroute_build::build_graph_with_options(&ways, &coords, false).unwrap();
+    let a = graph.node_latlon(graph.nearest_node(34.6841, 33.0379, 200.0).unwrap().0);
+    let b = graph.node_latlon(graph.nearest_node(35.1739, 33.3643, 200.0).unwrap().0);
+    for (from, to) in [(a, b), (b, a)] {
+        for profile in [Profile::Car, Profile::Foot] {
+            let c = router(&graph, profile).route(&[from, to]).unwrap();
+            let d = router(&dense, profile).route(&[from, to]).unwrap();
+            assert_eq!(c.meters, d.meters, "{profile:?} {from:?}->{to:?}");
+            assert_eq!(c.line, d.line, "shape changed: {profile:?} {from:?}->{to:?}");
+        }
+    }
 }

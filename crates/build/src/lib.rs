@@ -19,7 +19,7 @@ pub mod network;
 pub mod pbf;
 pub mod tags;
 
-pub use network::{build_graph, BuildStats, RawWay};
+pub use network::{build_graph, build_graph_with_options, BuildStats, RawWay};
 pub use pbf::read_road_network;
 
 use roughroute_core::GraphError;
