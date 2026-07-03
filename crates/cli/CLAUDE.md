@@ -57,6 +57,17 @@ test, 309.6 MB pbf — the largest region built in this environment). See
 PLAN.md "M6 scaling test" / "M6.1 incremental batch" / "M7" for measured
 numbers.
 
+**CI publishing (M8/D20).** `.github/workflows/build-regions.yml` runs this
+subcommand on a GitHub-hosted runner on a push that changes `regions.toml`,
+so region graphs are built/published without a local `.pbf` download and on
+the runner's larger RAM. The workflow is a thin driver — it fetches the
+published `index.json` **and** the `.graph` assets (the skip re-hashes graph
+bytes from disk, so they must be present), runs batch, and uploads only
+changed graphs + a fresh index. Don't move batch logic into YAML. `batch`
+logs free disk before/after each region so the runner's download→delete
+cycle is visible. Peak build RAM is unbounded (no streaming) — a multi-GB
+extract can OOM even the runner.
+
 ## Constraints
 - Route output goes to stdout (pipeable, per spec examples); diagnostics and
   build warnings to stderr. Errors → nonzero exit code with a clear message.

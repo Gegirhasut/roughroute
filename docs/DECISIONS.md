@@ -621,6 +621,57 @@ byte identical** between v2 and v3 — not just "close," identical — exactly
 as predicted by the "decode on load, nothing downstream changes" argument
 above.
 
+## D20. CI publishing on GitHub-hosted runners (M8)
+
+**Problem.** Building regions locally means the dev machine downloads every
+`.pbf` and stores every `.graph`, and — worse — is capped by the local VM's
+5.8 GB RAM, which OOM-kills Austria-class regions (D18). We want region graphs
+built and published without the local machine in the loop, and on hardware
+that clears that memory ceiling.
+
+**Decision.** A GitHub Actions workflow (`.github/workflows/build-regions.yml`)
+builds and publishes on `ubuntu-latest` runners (~14 GB disk, ~16 GB RAM),
+triggered by a push that changes `regions.toml` (plus manual dispatch). It is
+a **thin driver over the existing `roughroute batch`** — it reruns no batch
+logic in YAML; the incremental skip, the `net` size/ceiling/headroom gate,
+atomic writes, and the startup scratch sweep all come from the binary.
+
+**Runner sizing.** ~16 GB RAM builds the regions that OOM locally; regions are
+still processed one at a time with the `.pbf` deleted before the next (batch's
+per-region `disk before download` / `after cleanup` log makes this visible),
+so disk stays flat regardless of manifest size — a full continent's worth of
+*separate region-sized entries* is fine; a single multi-GB extract is not
+(see the RAM limit below).
+
+**Prior-index fetch strategy (the load-bearing choice).** `batch`'s skip
+(`cached_entry_is_fresh`) re-reads and re-hashes the `.graph` **bytes from
+disk** — it does not trust `index.json`'s recorded hash alone. So the workflow
+downloads the currently-published `index.json` *and every published `.graph`*
+into the output dir before running batch; fetching only the index would make
+every region rebuild every run. Re-hashing the downloaded assets is a feature,
+not just a cost: it verifies the published release is intact before the index
+is regenerated. The alternative — a `--trust-index` flag that skips on the
+recorded hash without the file present — was rejected: it would weaken the
+verified skip semantics and could carry forward an entry pointing at a
+missing/corrupt asset undetected. Re-downloading a few tens of MB per run is
+trivial on a runner.
+
+**Upload consistency.** Only graphs whose bytes changed vs a pre-run snapshot
+are uploaded (skipped regions' assets stay untouched); `index.json` is always
+refreshed. Publishing happens **only if batch wrote a fresh `index.json`** (a
+mid-run `AbortRun` returns before the index write, so nothing is published
+from an inconsistent state), and runs are serialized by a `concurrency` group
+so two never update the release at once. A region *build* failure (a `Skip`)
+still publishes the successes and a consistent index, then fails the job.
+
+**Known gap — RAM, deferred.** The runner clears the *local* memory ceiling
+but not memory in general: a truly large extract (Germany/France, multi-GB
+`.pbf`) can still OOM the runner because `batch` builds the whole graph in
+memory. The real fix is a **streaming build** that never holds the full graph
+at once; it is out of scope here and cross-referenced from D18 and the "Known
+limitations" section below. `batch` still has no RAM gate — only the disk
+gates.
+
 ## Known limitations (deliberate v1 scope)
 
 These are known and out of scope for v1 — documented so they're a choice, not
@@ -654,3 +705,12 @@ a surprise. Each notes the real fix if it ever becomes necessary.
   with a clean `GraphError::Malformed` (D19), so the former silent truncation
   is gone. Unreachable at target scale (it needs a multi-GB in-memory graph);
   no further work planned.
+
+- **`batch` builds the whole graph in memory (no streaming, no RAM gate)**:
+  peak RSS scales with region size, so a large extract can be OOM-killed —
+  locally on a small VM (D18) and even on a ~16 GB CI runner (D20) for a
+  multi-GB `.pbf`. `batch` gates disk but not memory. The real fix is a
+  **streaming build** that never holds the full node/edge/geometry set at
+  once; deferred. Until then, keep `regions.toml` to region-sized entries
+  (a manifest may list many regions — each is built and freed in turn — but
+  no single continent/planet extract).

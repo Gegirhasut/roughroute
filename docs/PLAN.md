@@ -218,6 +218,14 @@ in-repo). Hosting can later move to Cloudflare R2 by regenerating URLs only.
       touched only Austria — the others stayed skipped — confirming the
       core acceptance criterion before Austria itself was dropped (below)
       for an unrelated reason.
+- [x] M7 format v3 geometry delta-compression (D19) — see the M7 section
+      below; all four regions rebuilt v2 → v3, routes byte-identical.
+- [x] M8 CI publishing on GitHub-hosted runners (D20) —
+      `.github/workflows/build-regions.yml` builds/publishes region graphs on
+      the runner (thin driver over incremental `batch`); no local `.pbf`
+      download, and the runner RAM clears the Austria OOM. First run is
+      dispatched manually by the maintainer. Known gap: no streaming build /
+      RAM gate (a multi-GB extract can still OOM the runner).
 
 ### M6 scaling test (2026-07-03): Slovenia, a mid-size region
 
@@ -293,6 +301,34 @@ no special-case code needed, exactly per the D17 staleness rule.
 explains why the simpler whole-array scheme was chosen instead), a RAM gate
 for `roughroute batch` (the Austria lesson above), reduced peak build
 memory in the `build` crate.
+
+## M8 — CI publishing on GitHub-hosted runners (DONE, D20)
+
+Region graphs are built and published entirely on `ubuntu-latest` runners, so
+the local machine never downloads a `.pbf` or stores a `.graph` — and the
+runner's ~16 GB RAM builds the Austria-class regions that OOM the local VM
+(D18). `.github/workflows/build-regions.yml` triggers on a push that changes
+`regions.toml` (or manual dispatch, with an optional `force=all`), and is a
+thin driver over the existing incremental `roughroute batch`:
+
+- Fetches the currently-published `index.json` **and** `.graph` assets first —
+  the skip re-hashes graph bytes from disk, so the files must be present for a
+  region to count as up to date (D20 explains why fetching the index alone
+  would rebuild everything, and why re-hashing is a feature).
+- Runs `batch` with `--release-url-base` pointing at the `graphs-v3` release,
+  so only new/changed regions build.
+- Uploads only the graphs whose bytes changed plus a refreshed `index.json`
+  (skipped regions' assets untouched); publishes **only** when batch wrote a
+  fresh index (an `AbortRun` publishes nothing), serialized by a `concurrency`
+  group; a region failure still publishes the successes, then fails the job.
+
+Uses only the built-in `GITHUB_TOKEN`. `batch` also gained a per-region
+`disk before/after` log so the download→delete cycle is visible in the run.
+
+**Not done (known gap, D18/D20):** streaming build — `batch` still holds the
+whole graph in memory, so a multi-GB extract can OOM even the runner; no RAM
+gate. First real run is triggered manually by the maintainer, not by this
+milestone.
 
 ### M0 measured reality (2026-07-03, cyprus-latest ≈ 36 MB pbf, debug build)
 

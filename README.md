@@ -157,20 +157,50 @@ dropped rather than pursued further (`docs/DECISIONS.md` D18) — a real
 memory constraint of this dev machine, not a code defect; `roughroute batch`
 has no RAM gate today, only disk gates.
 
-### Publishing
+### Publishing (automated)
 
-No credentials live in this repo; publish manually or from CI with the
+The intended flow keeps your machine out of the loop entirely:
+
+1. Edit `regions.toml` (add or change a region), commit, and push to `main`.
+2. The **`Build & publish region graphs`** GitHub Action
+   (`.github/workflows/build-regions.yml`) runs on a GitHub-hosted runner:
+   it downloads the currently-published graphs + `index.json`, runs
+   `roughroute batch` (so **only the new/changed region actually builds** —
+   everything else is skipped by the sha256 + size + format-version check),
+   and uploads the newly-built `.graph` files plus a refreshed `index.json`
+   to the `graphs-v3` release. Untouched regions' assets are left as-is.
+
+Your machine never downloads a `.pbf` or stores a `.graph`. You can also run
+it manually from the Actions tab (**Run workflow**), optionally setting
+`force` to `all` to rebuild every region. The workflow uses only the built-in
+`GITHUB_TOKEN` — no PATs, no committed credentials.
+
+Because it runs on a runner with ~16 GB RAM, it also builds **Austria-class
+regions that OOM on a small local VM** (`docs/DECISIONS.md` D18). Regions are
+still processed one at a time with the `.pbf` deleted before the next, so
+runner disk stays flat no matter how many regions the manifest holds.
+
+> **Still bounded by RAM, not disk.** ~16 GB clears the regions that fail
+> locally, but a truly large extract (Germany/France, multi-GB `.pbf`) can
+> still OOM even on the runner — `batch` holds the whole graph in memory.
+> The real fix is a streaming build; it's tracked as a known gap in
+> `docs/DECISIONS.md` (D18 / the RAM note). Keep the manifest to region-sized
+> entries — no whole-country-of-continental-scale or planet extracts.
+
+### Publishing (manual)
+
+No credentials live in this repo; you can also publish by hand with the
 GitHub CLI (each regional graph is far below the 2 GiB asset limit):
 
 ```sh
-gh release create graphs-v1 dist/*.graph dist/index.json \
+gh release create graphs-v3 dist/*.graph dist/index.json \
   --title "Region graphs" \
   --notes "Map data © OpenStreetMap contributors (ODbL). Format v3."
 ```
 
-Bump the tag (`graphs-v2`, …) when regraphs are rebuilt or the format
-version changes, and pass the matching `--release-url-base` when generating
-`index.json`.
+Bump the tag (`graphs-v4`, …) when the format version changes, and pass the
+matching `--release-url-base` when generating `index.json` so its `url`
+fields point at the right release.
 
 **Future migration path (not set up now):** if release-asset egress ever
 becomes a problem, the same files can move to Cloudflare R2 (free egress)
