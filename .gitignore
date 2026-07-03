@@ -1,6 +1,10 @@
-# Build artifacts. The workspace redirects target-dir off-repo via
-# .cargo/config.toml, but keep this as a defensive fallback.
+# Build artifacts.
 /target
+
+# Local Cargo config is machine-specific (e.g. redirecting target-dir off a
+# slow/networked checkout); never committed so a fresh clone builds with
+# Cargo defaults.
+.cargo/config.toml
 
 # Source OSM extracts: build-time input only, never checked in except the
 # small, reproducible test fixture.
