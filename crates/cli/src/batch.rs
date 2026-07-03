@@ -40,6 +40,7 @@ use roughroute_core::{Graph, Profile, RouteOptions, Router};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+use crate::mem;
 use crate::net;
 
 /// The committed region manifest (`regions.toml`, D17).
@@ -139,6 +140,22 @@ pub fn cmd_batch(
         if trust_index { "trust-index (CI: no local .graph needed to skip)" } else { "disk re-hash (default)" }
     );
 
+    // Peak-RAM observability (mem.rs; dev/CI only, off the core). Log total
+    // system RAM once, and whether per-region peak measurement is available so
+    // the per-region peaks below can be read honestly (see docs/DECISIONS.md).
+    if let Some(total) = mem::total_ram_kib() {
+        eprintln!("system RAM: {} total", mem::fmt_kib(total));
+    }
+    let per_region_peak = mem::reset_peak_rss();
+    eprintln!(
+        "peak RSS: reported {}",
+        if per_region_peak {
+            "per region (VmHWM reset between builds)"
+        } else {
+            "as process high-water mark so far (per-region reset unavailable)"
+        }
+    );
+
     let mut index_entries: Vec<IndexRegion> = Vec::new();
     let mut built_count = 0u32;
     let mut skipped_count = 0u32;
@@ -161,15 +178,22 @@ pub fn cmd_batch(
             continue;
         }
 
+        // Reset the peak-RSS high-water mark right before the build so the
+        // reading afterwards reflects only this region's construction.
+        if per_region_peak {
+            mem::reset_peak_rss();
+        }
         match build_region(&agent, region, out_dir, &tmp_dir, release_url_base) {
             Ok(entry) => {
+                let peak = mem::peak_rss_kib().map(mem::fmt_kib);
                 eprintln!(
-                    "  ok: {} ({:.1} MB, {} nodes, {} edges, sha256 {}…)",
+                    "  ok: {} ({:.1} MB, {} nodes, {} edges, sha256 {}…, peak RSS {})",
                     entry.file,
                     entry.bytes as f64 / (1024.0 * 1024.0),
                     entry.nodes,
                     entry.edges,
                     &entry.sha256[..12],
+                    peak.as_deref().unwrap_or("n/a"),
                 );
                 index_entries.push(entry);
                 built_count += 1;

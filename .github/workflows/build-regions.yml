@@ -106,6 +106,9 @@ jobs:
           marker="$RUNNER_TEMP/batch_start"
           touch "$marker"
           echo "Disk before batch:"; df -h .
+          # Total runner RAM once, so the per-region 'peak RSS' lines batch
+          # prints below can be read as a fraction of what's available.
+          echo "Runner memory:"; free -h
 
           set +e
           ./target/release/roughroute batch \

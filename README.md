@@ -136,9 +136,17 @@ both profiles) → **delete the `.pbf`** — sources are never accumulated.
 Failed regions are skipped and reported; the exit code is non-zero if any
 failed. `index.json` is written to the output directory last.
 
+Each region's log line reports its **peak resident memory** (`peak RSS`,
+measured per region via `VmHWM` in `/proc`, reset between builds — Linux
+only; `docs/DECISIONS.md` D21) next to the size/nodes/edges stats, and total
+system RAM is logged once at the start. This is observability only — it does
+not change build results — so you can read how close a build came to the
+machine's limit before adding a bigger region.
+
 > Note: this hard ceiling and the disk-headroom check only protect *disk*
 > space. Building a region can still hit a *memory* ceiling on a
-> constrained machine — see the Austria note below and `docs/DECISIONS.md`
+> constrained machine — the peak-RSS log makes that headroom visible — see
+> the Austria note below and `docs/DECISIONS.md`
 > D18.
 
 Seeded regions and their measured results (2026-07-03, debug build, v3

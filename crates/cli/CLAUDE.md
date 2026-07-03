@@ -64,7 +64,12 @@ via `gh release create` (see README); no credentials here.
 the ceiling to 1.2 GB and build Austria (803.1 MB pbf) was OOM-killed on a
 5.8 GB-RAM dev VM (D18); dropped, ceiling reverted to 800 MB. If a future
 region needs more than the current ceiling admits, check available memory
-first, not just disk.
+first, not just disk. To make that concrete, `batch` now **measures peak
+RSS per region** (`mem.rs`, D21) and prints it in each region's `ok:` log
+line, plus total system RAM once at the start — read those to judge headroom
+before adding a bigger region. Measurement only: it's `/proc`-based
+(`VmHWM`, reset via `clear_refs` between regions), Linux-only, off the core,
+and changes no build result.
 
 Seeded regions: cyprus, malta, andorra (tiny), slovenia (mid-size scaling
 test, 309.6 MB pbf — the largest region built in this environment). See

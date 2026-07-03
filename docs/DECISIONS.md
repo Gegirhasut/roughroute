@@ -724,6 +724,41 @@ at once; it is out of scope here and cross-referenced from D18 and the "Known
 limitations" section below. `batch` still has no RAM gate — only the disk
 gates.
 
+## D21. Peak-RAM measurement per region (observability, M8.2)
+
+**Problem.** The RAM gap above (D18/D20) is a *guess* today — we know Austria
+OOM-killed during construction and that the final `.graph` size is a poor
+predictor of peak memory, but we have no actual number for how much RAM a
+region build costs. Deciding whether to attempt Austria (or larger) blind is
+how the first OOM happened.
+
+**Decision.** `batch` measures and logs **peak resident memory per region**,
+alongside the existing size/nodes/edges stats, and logs total system RAM once
+at the start of a run. Measurement lives in `crates/cli/src/mem.rs` — dev/CI
+observability only, pure `std::fs`, **off the offline core and the routing
+runtime** (spec §2.1), no new dependency.
+
+- **Source.** Peak RSS is `VmHWM` from `/proc/self/status` (KiB); total RAM is
+  `MemTotal` from `/proc/meminfo`. Chosen over `getrusage`'s `ru_maxrss`
+  because `VmHWM` can be *reset*, and reading `/proc` needs no libc.
+- **Per-region semantics.** `VmHWM` is a process-wide high-water mark, and
+  regions build one at a time in the same process, so a naive read would
+  report "max over all regions so far." Before each region's build the builder
+  writes `5` to `/proc/self/clear_refs`, which resets `VmHWM` down to the
+  current RSS (Linux ≥ 4.0). The reading afterwards is then that region's own
+  peak. Verified: building a larger region then a smaller one reports the
+  smaller one's true (lower) peak, not the larger one's. Where the reset isn't
+  accepted (older/locked-down kernel), the builder says so and the number is
+  the process peak so far — an honest, if coarser, label.
+- **Measurement only.** No effect on build results, graph bytes, determinism,
+  the `.graph` format, or `index.json` — the peak is a log line, not a stored
+  field. There is still no RAM *gate*; this just makes headroom visible so the
+  decision to add a bigger region is informed rather than blind.
+
+Re-measuring already-published regions requires a rebuild (they skip under
+`--trust-index`): dispatch the workflow with `force=all`, or the next new
+region logs its peak on its first build.
+
 ## Known limitations (deliberate v1 scope)
 
 These are known and out of scope for v1 — documented so they're a choice, not
@@ -761,8 +796,9 @@ a surprise. Each notes the real fix if it ever becomes necessary.
 - **`batch` builds the whole graph in memory (no streaming, no RAM gate)**:
   peak RSS scales with region size, so a large extract can be OOM-killed —
   locally on a small VM (D18) and even on a ~16 GB CI runner (D20) for a
-  multi-GB `.pbf`. `batch` gates disk but not memory. The real fix is a
-  **streaming build** that never holds the full node/edge/geometry set at
-  once; deferred. Until then, keep `regions.toml` to region-sized entries
-  (a manifest may list many regions — each is built and freed in turn — but
-  no single continent/planet extract).
+  multi-GB `.pbf`. `batch` gates disk but not memory, though it now *measures*
+  and logs peak RSS per region (D21) so headroom is visible before adding a
+  bigger region. The real fix is a **streaming build** that never holds the
+  full node/edge/geometry set at once; deferred. Until then, keep
+  `regions.toml` to region-sized entries (a manifest may list many regions —
+  each is built and freed in turn — but no single continent/planet extract).

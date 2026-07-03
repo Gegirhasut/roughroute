@@ -92,7 +92,10 @@ build scratch adds up. Rules:
 - The batch tool's disk gates (headroom + `.pbf` size ceiling) have **no RAM
   equivalent** — a large region can still be OOM-killed on a
   memory-constrained machine even after the disk checks pass (hit this
-  building Austria on a 5.8 GB-RAM dev VM; D18). Known gap, not fixed.
+  building Austria on a 5.8 GB-RAM dev VM; D18). Known gap, not fixed —
+  but `batch` now **measures and logs peak RSS per region** (D21, `mem.rs`,
+  `/proc`-based, Linux-only, off the core) so the headroom is visible before
+  attempting a bigger region.
 - Region graphs are built/published by CI (M8/D20):
   `.github/workflows/build-regions.yml` runs `roughroute batch --trust-index`
   on a GitHub-hosted runner on a push that changes `regions.toml`, so no

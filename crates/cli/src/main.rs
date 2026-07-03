@@ -7,6 +7,7 @@
 
 mod batch;
 mod export;
+mod mem;
 mod net;
 
 use std::error::Error;
