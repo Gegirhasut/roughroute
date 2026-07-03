@@ -24,6 +24,11 @@ are ignored by design). Compiles to CLI, WASM, and a UniFFI Kotlin binding.
   `#[ignore]`d without it).
 
 ## Build / test
+- Toolchain is pinned in `rust-toolchain.toml` (1.96.1) — the single source
+  local and CI share; bump that one file to move both. MSRV floor is 1.88
+  (`osmpbf`/`home`); `Cargo.toml` `rust-version` reflects it. Don't hardcode a
+  Rust version in a workflow again — a stale CI pin below the dep tree's need
+  is what broke the first CI run.
 - Everything: `cargo test` and `cargo clippy --all-targets` from `app/`
   (workspace root). Both must be clean before a milestone is called done.
 - Real-fixture integration: `cargo test -- --ignored` (needs

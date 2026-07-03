@@ -15,7 +15,10 @@ version = "0.1.0"
 edition = "2021"
 license = "MIT"
 repository = "https://github.com/Gegirhasut/roughroute"
-rust-version = "1.85"
+# MSRV floor: the dependency tree requires >= 1.88 (osmpbf and home need
+# 1.88; the icu/idna chain needs 1.86). This is the oldest rustc that builds
+# the workspace, not the exact toolchain used — see rust-toolchain.toml.
+rust-version = "1.88"
 
 [workspace.dependencies]
 roughroute-core = { path = "crates/core" }

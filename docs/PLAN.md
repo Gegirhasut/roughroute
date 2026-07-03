@@ -166,7 +166,8 @@ in-repo). Hosting can later move to Cloudflare R2 by regenerating URLs only.
 
 ## Status
 
-- [x] Prerequisites (rustup stable 1.96.1 installed 2026-07-03; note: builds
+- [x] Prerequisites (toolchain pinned to 1.96.1 in `rust-toolchain.toml` so
+      local and CI agree — MSRV floor is 1.88, `osmpbf`/`home`; note: builds
       must target the VM-local disk, see `.cargo/config.toml`)
 - [x] M0 core+build+cli — all tests pass, clippy clean, Cyprus end-to-end OK
 - [x] M1 wasm — wasm32 build + smoke tests pass in a real WASM runtime

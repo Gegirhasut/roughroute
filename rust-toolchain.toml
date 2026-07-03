@@ -1,0 +1,13 @@
+# Single source of truth for the Rust toolchain — local dev and CI both use
+# this exact version, so the "local floats newer / CI pinned older" mismatch
+# that a stale CI pin caused can't recur. The dependency tree needs >= 1.88
+# (osmpbf, home require 1.88; the icu/idna chain needs 1.86); this is the
+# current local stable, comfortably above that. Bump this one file to move
+# local and CI together.
+#
+# This is the exact *build* toolchain. The workspace `rust-version` in
+# Cargo.toml (1.88) is the separate MSRV *floor* — the oldest rustc the
+# dependency tree tolerates — not this pin.
+[toolchain]
+channel = "1.96.1"
+components = ["clippy", "rustfmt"]

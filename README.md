@@ -22,7 +22,11 @@ Code license: MIT.
 
 ## Build
 
-Requires stable Rust. The Cargo workspace root is this directory (`app/`).
+The Cargo workspace root is this directory (`app/`). The toolchain is pinned
+in `rust-toolchain.toml` (currently 1.96.1), which `rustup` installs
+automatically — local dev and CI build with the same rustc. The dependency
+tree's MSRV floor is **1.88** (`osmpbf`/`home` require it); older toolchains
+are refused by Cargo.
 
 ```sh
 cargo build --release            # core + build + cli

@@ -49,12 +49,14 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # Pinned toolchain (not "latest") so builds are reproducible run to run.
-      - name: Install Rust 1.85.0
-        uses: dtolnay/rust-toolchain@1.85.0
-
-      - name: Cache cargo registry + target
-        uses: Swatinem/rust-cache@v2
+      # Install the exact toolchain pinned in rust-toolchain.toml (single
+      # source of truth shared with local dev — bump that file, not this) and
+      # cache the cargo registry + target. Reproducible run to run, and it
+      # can't go stale below the dependency tree's needs the way a hardcoded
+      # pin here did. This action reads rust-toolchain.toml automatically and
+      # wraps Swatinem/rust-cache for caching.
+      - name: Install pinned Rust toolchain + cache
+        uses: actions-rust-lang/setup-rust-toolchain@v1
 
       # Release build matters for wall-clock on big regions.
       - name: Build the CLI
