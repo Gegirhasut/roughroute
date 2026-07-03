@@ -268,6 +268,11 @@ fn build_region(
     //    out_dir. No byte is fetched here beyond a HEAD request.
     net::gate_download(agent, &region.pbf_url, out_dir, &region.id).map_err(RegionError::AbortRun)?;
 
+    // Free disk before the download — paired with the "after cleanup" line
+    // below, this makes the per-region download→delete cycle visible in the
+    // log (a CI run confirms the disk stays flat region to region).
+    log_free_disk(out_dir, "before download");
+
     // 2. Download to scratch.
     let pbf_path = tmp_dir.join(format!("{}.osm.pbf", region.id));
     let downloaded = net::download(agent, &region.pbf_url, &pbf_path).map_err(RegionError::Skip);
@@ -309,7 +314,17 @@ fn build_region(
 
     // 5. Delete the .pbf before the next region — the core disk rule.
     let _ = fs::remove_file(&pbf_path);
+    log_free_disk(out_dir, "after cleanup");
     result
+}
+
+/// Best-effort per-region disk log (reuses the headroom gate's `df`): the
+/// `before download` / `after cleanup` pair should stay roughly equal,
+/// showing the `.pbf` was removed and disk isn't accumulating.
+fn log_free_disk(dir: &Path, when: &str) {
+    if let Ok(bytes) = net::available_bytes(dir) {
+        eprintln!("  disk {when}: {:.1} GiB free", bytes as f64 / (1u64 << 30) as f64);
+    }
 }
 
 /// Load the written bytes the way the runtime does and prove a trivial route
