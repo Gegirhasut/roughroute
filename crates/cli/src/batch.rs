@@ -107,7 +107,11 @@ pub fn cmd_batch(
     validate_manifest(&manifest)?;
 
     fs::create_dir_all(out_dir)?;
+    // Startup sweep: wipe any scratch left by a prior run that died mid-build
+    // (a panic or OOM kill can leave a partial .pbf behind — the Austria case,
+    // docs/DECISIONS.md D18), so a fresh run never inherits stale files.
     let tmp_dir = out_dir.join(".tmp");
+    let _ = fs::remove_dir_all(&tmp_dir);
     fs::create_dir_all(&tmp_dir)?;
 
     // One timeout-configured agent for every download this run (net::agent).
@@ -167,7 +171,7 @@ pub fn cmd_batch(
     let _ = fs::remove_dir_all(&tmp_dir); // no scratch left behind
 
     let index_path = out_dir.join("index.json");
-    fs::write(&index_path, render_index(&index_entries)?)?;
+    write_atomic(&index_path, render_index(&index_entries)?.as_bytes())?;
     eprintln!(
         "\nwrote {} ({} built, {} skipped up to date, {} failed)",
         index_path.display(),
@@ -280,7 +284,7 @@ fn build_region(
             .map_err(|e| RegionError::Skip(format!("graph build failed: {e}")))?;
         let file = format!("{}.graph", region.id);
         let graph_path = out_dir.join(&file);
-        fs::write(&graph_path, graph.to_bytes())
+        write_atomic(&graph_path, &graph.to_bytes())
             .map_err(|e| RegionError::Skip(format!("cannot write graph: {e}")))?;
         drop(graph); // verify the *file*, exactly as the runtime will see it
 
@@ -310,16 +314,25 @@ fn build_region(
 
 /// Load the written bytes the way the runtime does and prove a trivial route
 /// works: `(nodes, edges, bbox)` on success.
+///
+/// For each profile that has *any* usable road, route between the endpoints
+/// of one such edge — both are exact node coordinates directly joined by a
+/// road the profile can use, so this cannot false-negative the way a fixed
+/// probe point could (a point whose neighborhood is, say, motorway-only
+/// would fail a Foot snap even though the graph is perfectly fine). A profile
+/// with no usable road anywhere is simply not verified for that profile.
 fn verify_graph_bytes(bytes: &[u8]) -> Result<(u32, u32, [f64; 4]), String> {
     let graph = Graph::from_bytes(bytes).map_err(|e| format!("verification load failed: {e}"))?;
     if graph.node_count() == 0 {
         return Err("graph has no nodes (empty or non-road region?)".into());
     }
-    // Route between two node coordinates; fallback allowed, so only a snap
-    // failure (impossible from a node coordinate) or a bug can fail this.
-    let a = graph.node_latlon(0);
-    let b = graph.node_latlon(graph.node_count() / 2);
+    if graph.edge_count() == 0 {
+        return Err("graph has nodes but no edges (broken extract?)".into());
+    }
     for profile in [Profile::Car, Profile::Foot] {
+        let Some((a, b)) = first_usable_edge_endpoints(&graph, profile) else {
+            continue; // no road this profile can use — nothing to verify for it
+        };
         let router = Router::new(
             &graph,
             RouteOptions { profile, allow_fallback: true, max_snap_meters: 1_000.0 },
@@ -337,6 +350,35 @@ fn verify_graph_bytes(bytes: &[u8]) -> Result<(u32, u32, [f64; 4]), String> {
         graph.edge_count(),
         [bb.min_lat, bb.min_lon, bb.max_lat, bb.max_lon],
     ))
+}
+
+/// Coordinates of the endpoints of the first edge usable by `profile`, or
+/// `None` if the graph has no road that profile can use.
+fn first_usable_edge_endpoints(graph: &Graph, profile: Profile) -> Option<([f64; 2], [f64; 2])> {
+    let mask = profile.mask();
+    for n in 0..graph.node_count() {
+        for e in graph.edges_from(n) {
+            if e.access & mask != 0 {
+                return Some((graph.node_latlon(n), graph.node_latlon(e.target)));
+            }
+        }
+    }
+    None
+}
+
+/// Write `bytes` to `final_path` atomically: write to a sibling temp file in
+/// the same directory, then rename over the target. A concurrent reader — or
+/// a crash mid-write — sees either the old file or the complete new one,
+/// never a truncated one. (Same-directory rename is atomic on the local
+/// filesystems this dev/CI tool targets.)
+fn write_atomic(final_path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let dir = final_path.parent().filter(|p| !p.as_os_str().is_empty());
+    let dir = dir.unwrap_or_else(|| Path::new("."));
+    let name = final_path.file_name().and_then(|n| n.to_str()).unwrap_or("out");
+    let tmp = dir.join(format!(".{name}.{}.tmp", std::process::id()));
+    fs::write(&tmp, bytes)?;
+    fs::rename(&tmp, final_path)?;
+    Ok(())
 }
 
 fn render_index(regions: &[IndexRegion]) -> Result<String, Box<dyn Error>> {
@@ -430,6 +472,29 @@ mod tests {
         // Valid but empty graph: refused (nothing to route on).
         let empty = roughroute_core::Graph::from_parts(vec![], vec![0], vec![], vec![]).unwrap();
         assert!(verify_graph_bytes(&empty.to_bytes()).is_err());
+    }
+
+    #[test]
+    fn verify_passes_a_car_only_graph_without_false_negating_on_foot() {
+        // A region with only drivable roads must verify (the Foot check is
+        // skipped, not failed). The old fixed-probe-point logic would route
+        // Foot from a node coordinate and get SnapTooFar, dropping the whole
+        // region — this is the false-negative the per-profile fix removes.
+        use roughroute_core::profile::ACCESS_CAR;
+        let coords: std::collections::BTreeMap<i64, [f64; 2]> =
+            [(1, [35.0, 33.0]), (2, [35.0, 33.02])].into_iter().collect();
+        let ways = vec![RawWay { node_ids: vec![1, 2], access: ACCESS_CAR }];
+        let (graph, _) = roughroute_build::build_graph(&ways, &coords).unwrap();
+        assert!(verify_graph_bytes(&graph.to_bytes()).is_ok());
+    }
+
+    #[test]
+    fn verify_rejects_a_nodes_but_no_edges_graph() {
+        // Two nodes, zero edges (broken extract): nothing routes, refuse it.
+        let nodes =
+            vec![[roughroute_core::geo::deg_to_fixed(35.0), roughroute_core::geo::deg_to_fixed(33.0)]];
+        let graph = roughroute_core::Graph::from_parts(nodes, vec![0, 0], vec![], vec![]).unwrap();
+        assert!(verify_graph_bytes(&graph.to_bytes()).is_err());
     }
 
     fn sample_entry() -> IndexRegion {
