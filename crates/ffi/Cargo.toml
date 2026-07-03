@@ -1,0 +1,26 @@
+[package]
+name = "roughroute-ffi"
+description = "UniFFI (Kotlin) wrapper around roughroute-core (spec §6.4)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+# HARD CONSTRAINT: core + uniffi only — no osmpbf, no fs/network crates.
+[dependencies]
+roughroute-core.workspace = true
+uniffi = "0.29"
+
+[[bin]]
+# Binding generator entry point:
+#   cargo run -p roughroute-ffi --bin uniffi-bindgen -- \
+#     generate --library <path/to/libroughroute_ffi.so> --language kotlin --out-dir <dir>
+name = "uniffi-bindgen"
+path = "src/bin/uniffi-bindgen.rs"
+required-features = ["cli"]
+
+[features]
+cli = ["uniffi/cli"]

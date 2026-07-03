@@ -5,7 +5,10 @@ members = [
     "crates/build",
     "crates/cli",
     "crates/wasm",
+    "crates/ffi",
 ]
+# wasm/ffi are M1/M2 stubs; day-to-day builds don't need their toolchains.
+default-members = ["crates/core", "crates/build", "crates/cli"]
 
 [workspace.package]
 version = "0.1.0"
