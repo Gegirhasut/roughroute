@@ -164,10 +164,16 @@
   .step .env{margin-top:14px;font-family:'Space Mono',monospace;font-size:11px;color:var(--line-2);text-transform:uppercase;letter-spacing:0.1em;color:#5a6f78}
 
   /* ---------- code example ---------- */
+  /* Each example is a labelled block, both shown at once. The label is a
+     plain caption (like the .cell .k / .step .n headings), NOT a clickable
+     tab — no border box, no active state, nothing to click. */
+  .code-block + .code-block{margin-top:30px}
+  .code-label{
+    display:block;font-family:'Space Mono',monospace;
+    font-size:12px;letter-spacing:0.14em;text-transform:uppercase;
+    color:var(--route);margin:0 0 10px;
+  }
   .code-wrap{border:1px solid var(--line);background:#0a1116}
-  .code-tabs{display:flex;border-bottom:1px solid var(--line);font-family:'Space Mono',monospace;font-size:12.5px}
-  .code-tabs span{padding:13px 18px;color:var(--muted);letter-spacing:0.06em;border-right:1px solid var(--line)}
-  .code-tabs span.on{color:var(--route);background:rgba(123,216,143,0.06)}
   pre{padding:24px;overflow-x:auto;font-family:'Space Mono',monospace;font-size:13.5px;line-height:1.7;color:#c8d4d9}
   pre .c{color:#5a6f78}       /* comment */
   pre .g{color:var(--route)}  /* accent token */
@@ -365,11 +371,9 @@
       <h2 data-en="Two calls: load a graph, ask for a route." data-ru="Два вызова: загрузить граф, запросить маршрут." data-zh="两次调用：加载图，请求路线。" data-es="Dos llamadas: cargar un grafo, pedir una ruta." data-de="Zwei Aufrufe: einen Graphen laden, eine Route anfragen." data-fr="Deux appels : charger un graphe, demander un itinéraire." data-pt="Duas chamadas: carregar um grafo, pedir uma rota." data-ja="呼び出しは二回：グラフを読み込み、ルートを求める。" data-ar="استدعاءان اثنان: تحميل رسم بياني، وطلب مسار.">Two calls: load a graph, ask for a route.</h2>
       <p data-en="The same neutral contract everywhere — &lt;code&gt;[lat, lon]&lt;/code&gt; in, &lt;code&gt;{ line, meters, fallback }&lt;/code&gt; out." data-ru="Единый нейтральный контракт везде — &lt;code&gt;[lat, lon]&lt;/code&gt; на входе, &lt;code&gt;{ line, meters, fallback }&lt;/code&gt; на выходе." data-zh="处处统一的中立契约——输入 &lt;code&gt;[lat, lon]&lt;/code&gt;，输出 &lt;code&gt;{ line, meters, fallback }&lt;/code&gt;。" data-es="El mismo contrato neutral en todas partes — &lt;code&gt;[lat, lon]&lt;/code&gt; de entrada, &lt;code&gt;{ line, meters, fallback }&lt;/code&gt; de salida." data-de="Überall derselbe neutrale Vertrag — &lt;code&gt;[lat, lon]&lt;/code&gt; rein, &lt;code&gt;{ line, meters, fallback }&lt;/code&gt; raus." data-fr="Le même contrat neutre partout — &lt;code&gt;[lat, lon]&lt;/code&gt; en entrée, &lt;code&gt;{ line, meters, fallback }&lt;/code&gt; en sortie." data-pt="O mesmo contrato neutro em todo lugar — &lt;code&gt;[lat, lon]&lt;/code&gt; na entrada, &lt;code&gt;{ line, meters, fallback }&lt;/code&gt; na saída." data-ja="どこでも同じ中立な契約 — 入力は &lt;code&gt;[lat, lon]&lt;/code&gt;、出力は &lt;code&gt;{ line, meters, fallback }&lt;/code&gt;。" data-ar="العقد المحايد نفسه في كل مكان — إدخال &lt;code&gt;[lat, lon]&lt;/code&gt;، وإخراج &lt;code&gt;{ line, meters, fallback }&lt;/code&gt;.">The same neutral contract everywhere — <code>[lat, lon]</code> in, <code>{ line, meters, fallback }</code> out.</p>
     </div>
-    <div class="code-wrap" dir="ltr">
-      <div class="code-tabs">
-        <span class="on">WASM · TypeScript</span>
-        <span>CLI</span>
-      </div>
+    <div class="code-block" dir="ltr">
+      <span class="code-label">WASM · TypeScript</span>
+      <div class="code-wrap">
 <pre><span class="c">// load a region graph (from bundle or cache — the app's job)</span>
 <span class="k">const</span> bytes = <span class="k">await</span> loadRegionGraph();
 <span class="k">const</span> router = <span class="k">new</span> <span class="g">WasmRouter</span>(<span class="k">new</span> Uint8Array(bytes));
@@ -384,8 +388,11 @@ res.line     <span class="c">// → dense polyline following the roads</span>
 res.meters   <span class="c">// → 2143.7</span>
 res.fallback <span class="c">// → false</span>
 </pre>
+      </div>
     </div>
-    <div class="code-wrap" dir="ltr" style="margin-top:22px">
+    <div class="code-block" dir="ltr">
+      <span class="code-label">CLI</span>
+      <div class="code-wrap">
 <pre><span class="c"># build a graph once, offline</span>
 roughroute <span class="g">build</span> --pbf cyprus.osm.pbf --out cyprus.graph --profiles car,foot
 
@@ -394,6 +401,7 @@ roughroute <span class="g">route</span> --graph cyprus.graph --profile car \
   --via <span class="a">34.7071,33.0226</span> --via <span class="a">34.6841,33.0379</span> \
   --format gpx &gt; route.gpx
 </pre>
+      </div>
     </div>
   </div>
 </section>
