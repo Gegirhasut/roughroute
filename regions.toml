@@ -29,3 +29,13 @@ pbf_url = "https://download.geofabrik.de/europe/andorra-latest.osm.pbf"
 id = "slovenia"
 name = "Slovenia"
 pbf_url = "https://download.geofabrik.de/europe/slovenia-latest.osm.pbf"
+
+[[region]]
+id = "switzerland"
+name = "Switzerland"
+pbf_url = "https://download.geofabrik.de/europe/switzerland-latest.osm.pbf"
+
+[[region]]
+id = "kenya"
+name = "Kenya"
+pbf_url = "https://download.geofabrik.de/africa/kenya-latest.osm.pbf"
