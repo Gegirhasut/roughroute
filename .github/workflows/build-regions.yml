@@ -1,0 +1,169 @@
+# Build region .graph files on a GitHub-hosted runner and publish them as
+# Release assets, so no local machine ever downloads a .pbf or stores a
+# .graph. The runner (~14 GB disk, ~16 GB RAM) also clears the memory ceiling
+# that OOM-kills Austria-class regions on a small local VM (docs/DECISIONS.md
+# D18); regions are still built one at a time with the .pbf deleted between,
+# so disk stays flat regardless of how many regions the manifest holds.
+#
+# All the real logic lives in `roughroute batch` (incremental skip by
+# sha256 + size + format_version, the shared net gate, atomic writes, the
+# startup scratch sweep). This workflow only fetches prior state, runs batch,
+# and publishes — it does not reimplement any of that.
+name: Build & publish region graphs
+
+on:
+  # Editing the manifest is the whole trigger: add/change a region, push, and
+  # only that region rebuilds on the runner.
+  push:
+    branches: [main]
+    paths: ['regions.toml']
+  # Manual runs, with an optional force-rebuild.
+  workflow_dispatch:
+    inputs:
+      force:
+        description: 'Set to "all" to force-rebuild every region (batch --force). Blank = incremental (only changed regions build).'
+        required: false
+        default: ''
+        type: string
+
+# Serialize publishes: never let two runs update the same release at once.
+# Queue rather than cancel — cancelling mid-publish could leave the release
+# with new assets uploaded but a stale index.json.
+concurrency:
+  group: publish-region-graphs
+  cancel-in-progress: false
+
+# Only the built-in token, only the scope needed to manage the release.
+permissions:
+  contents: write
+
+env:
+  # Stable release the graphs live on; bump alongside the .graph format
+  # version (core format VERSION is 3).
+  RELEASE_TAG: graphs-v3
+
+jobs:
+  build-regions:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Pinned toolchain (not "latest") so builds are reproducible run to run.
+      - name: Install Rust 1.85.0
+        uses: dtolnay/rust-toolchain@1.85.0
+
+      - name: Cache cargo registry + target
+        uses: Swatinem/rust-cache@v2
+
+      # Release build matters for wall-clock on big regions.
+      - name: Build the CLI
+        run: cargo build --release -p roughroute-cli
+
+      # Pull the currently-published index.json AND the existing .graph assets
+      # into the batch output dir. The incremental skip re-hashes the graph
+      # bytes from disk (batch.rs cached_entry_is_fresh), so the files must be
+      # present for a region to be recognised as up to date — fetching the
+      # index alone would rebuild everything every run. Re-hashing also
+      # verifies the published assets are intact before we regenerate the
+      # index. If no release exists yet, start clean.
+      - name: Fetch currently-published graphs + index
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            echo "Downloading existing assets from release '$RELEASE_TAG'…"
+            gh release download "$RELEASE_TAG" --dir dist --clobber || true
+          else
+            echo "No prior release '$RELEASE_TAG' — starting from an empty output dir."
+          fi
+          # Snapshot the hashes we start with, to tell newly-built graphs from
+          # carried-forward (skipped) ones when deciding what to upload.
+          ( cd dist && sha256sum ./*.graph 2>/dev/null || true ) > before.sha256
+          echo "Prior graphs on the release:"
+          cat before.sha256 || true
+
+      # Run the incremental batch. Capture its exit code and whether it wrote
+      # a fresh index.json (a mid-run AbortRun — disk/ceiling/unknown size —
+      # returns before writing the index, in which case we must NOT publish a
+      # possibly-inconsistent set).
+      - name: Build regions (incremental)
+        id: batch
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -uo pipefail
+          FORCE=""
+          if [ "${{ github.event.inputs.force }}" = "all" ]; then
+            FORCE="--force"
+            echo "workflow_dispatch force=all → passing --force (rebuild everything)"
+          fi
+
+          marker="$RUNNER_TEMP/batch_start"
+          touch "$marker"
+          echo "Disk before batch:"; df -h .
+
+          set +e
+          ./target/release/roughroute batch \
+            --manifest regions.toml \
+            --out-dir dist \
+            --release-url-base "https://github.com/${{ github.repository }}/releases/download/$RELEASE_TAG" \
+            $FORCE
+          code=$?
+          set -e
+
+          echo "Disk after batch:"; df -h .
+          echo "batch_exit=$code" >> "$GITHUB_OUTPUT"
+
+          # index.json is written only after the region loop completes; if it
+          # is newer than the marker, the run produced a consistent index and
+          # is safe to publish (even when some regions failed as Skips).
+          if [ dist/index.json -nt "$marker" ]; then
+            echo "index_fresh=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "index_fresh=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::batch did not write a fresh index.json (aborted before the loop finished); nothing will be published this run."
+          fi
+
+      # Publish only when batch produced a consistent index. Upload just the
+      # graphs whose bytes are new or changed vs the pre-run snapshot, so
+      # skipped regions' assets are left untouched; index.json is always
+      # refreshed because it reflects this run's full state.
+      - name: Publish built graphs + index
+        if: steps.batch.outputs.index_fresh == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          if ! gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release create "$RELEASE_TAG" \
+              --title "Region graphs (format v3)" \
+              --notes "Pre-built roughroute region graphs, built by CI from regions.toml. Map data © OpenStreetMap contributors (ODbL). index.json is the source of truth (region → url, bytes, sha256, format_version)."
+          fi
+
+          upload=()
+          for g in dist/*.graph; do
+            [ -e "$g" ] || continue
+            base="$(basename "$g")"
+            new="$(sha256sum "$g" | awk '{print $1}')"
+            old="$(awk -v f="./$base" '$2==f {print $1}' before.sha256 || true)"
+            if [ "$new" != "$old" ]; then
+              upload+=("$g")
+              echo "new/changed: $base"
+            else
+              echo "unchanged (leaving release asset untouched): $base"
+            fi
+          done
+
+          echo "Uploading ${#upload[@]} graph(s) + index.json to '$RELEASE_TAG'…"
+          gh release upload "$RELEASE_TAG" "${upload[@]}" dist/index.json --clobber
+
+      # Surface any region build failure as a red job — but only after the
+      # successful regions and their index have already been published above.
+      - name: Fail the job if any region failed to build
+        if: steps.batch.outputs.batch_exit != '0'
+        run: |
+          echo "::error::roughroute batch exited ${{ steps.batch.outputs.batch_exit }} — one or more regions failed to build (successful regions were still published)."
+          exit 1
