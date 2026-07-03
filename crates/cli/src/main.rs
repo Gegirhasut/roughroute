@@ -48,6 +48,10 @@ enum Command {
     /// Build, verify, and index every region in the manifest (dev/CI):
     /// per region download -> build -> verify -> delete the .pbf, then write
     /// index.json next to the graphs. See README "Regional graphs".
+    ///
+    /// Incremental: a region already present in index.json with a matching
+    /// file hash and the current format version is skipped entirely (no
+    /// probe, no download, no rebuild). Pass --force to rebuild everything.
     Batch {
         /// Region manifest (docs/DECISIONS.md D17).
         #[arg(long, default_value = "regions.toml")]
@@ -60,6 +64,9 @@ enum Command {
         /// omitted.
         #[arg(long)]
         release_url_base: Option<String>,
+        /// Rebuild every region even if index.json says it's up to date.
+        #[arg(long)]
+        force: bool,
     },
     /// Build a route over a .graph and print it to stdout.
     Route {
@@ -116,8 +123,8 @@ fn main() {
 fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
     match cli.command {
         Command::Build { pbf, pbf_url, out, profiles } => cmd_build(pbf, pbf_url, out, &profiles),
-        Command::Batch { manifest, out_dir, release_url_base } => {
-            batch::cmd_batch(&manifest, &out_dir, release_url_base.as_deref())
+        Command::Batch { manifest, out_dir, release_url_base, force } => {
+            batch::cmd_batch(&manifest, &out_dir, release_url_base.as_deref(), force)
         }
         Command::Route { graph, profile, via, format, max_snap_meters, no_fallback } => {
             cmd_route(&graph, profile, &via, format, max_snap_meters, no_fallback)

@@ -6,7 +6,16 @@
 //! `.pbf`** (also on failure) before touching the next region. Never two
 //! `.pbf`s at once; the whole run aborts before a download that could fill
 //! the disk.
+//!
+//! **Incremental** (docs/DECISIONS.md D17 addendum): before touching a
+//! region, its existing `index.json` entry is checked against the file on
+//! disk — same `sha256`/size and `format_version` as the graph currently
+//! written means the region is already up to date, and it is skipped
+//! entirely (no HEAD probe, no download, no rebuild). `--force` bypasses
+//! this for every region. Adding one new region to `regions.toml` therefore
+//! touches only that region on the next run.
 
+use std::collections::HashMap;
 use std::error::Error;
 use std::fmt::Write as _;
 use std::fs;
@@ -28,6 +37,13 @@ const UNKNOWN_PBF_ESTIMATE_BYTES: u64 = 5 << 30; // 5 GiB, deliberately harsh
 /// (a continent, a whole country the size of the US) landing in the
 /// manifest and eating an unattended run's disk or wall-clock budget; raise
 /// it deliberately if a legitimately larger region is ever added.
+///
+/// Briefly raised 2026-07-03 to 1.2 GB to admit Austria (probed at
+/// 803.1 MB) as a larger scaling test; reverted to 800 MB the same day after
+/// that build was OOM-killed on this dev VM's 5.8 GB RAM (docs/DECISIONS.md
+/// D18) — a *memory*, not disk, ceiling this constant was never meant to
+/// guard against. The disk headroom check below is independent of this
+/// value either way.
 const HARD_MAX_PBF_BYTES: u64 = 800_000_000; // 800 MB (decimal)
 
 /// The committed region manifest (`regions.toml`, D17).
@@ -48,6 +64,12 @@ struct ManifestRegion {
 }
 
 /// The published discovery index (`index.json`, D17).
+///
+/// `format_version` here is informational — the format this run's builder
+/// targets — since regions can carry mixed *actual* versions during a
+/// migration window (some rebuilt at a new version, some not yet). Each
+/// [`IndexRegion`] carries its own authoritative `format_version` for
+/// staleness checks.
 #[derive(Serialize)]
 struct Index<'a> {
     schema_version: u32,
@@ -56,7 +78,16 @@ struct Index<'a> {
     regions: &'a [IndexRegion],
 }
 
-#[derive(Serialize)]
+/// A minimal reader for an existing `index.json`, tolerant of older schemas
+/// (missing fields default rather than failing the whole parse) — a stale
+/// schema just means those entries look outdated and get rebuilt.
+#[derive(Deserialize, Default)]
+struct ExistingIndex {
+    #[serde(default)]
+    regions: Vec<IndexRegion>,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
 struct IndexRegion {
     id: String,
     name: String,
@@ -69,6 +100,11 @@ struct IndexRegion {
     /// `[min_lat, min_lon, max_lat, max_lon]`, degrees.
     bbox: [f64; 4],
     source_pbf_url: String,
+    /// The `.graph` format version this entry's file was built with.
+    /// Missing in pre-incremental `index.json` files (defaults to 0, which
+    /// never matches a real version — such entries are always rebuilt).
+    #[serde(default)]
+    format_version: u16,
 }
 
 /// A region failure that must stop the whole run (disk safety) vs one that
@@ -82,6 +118,7 @@ pub fn cmd_batch(
     manifest_path: &Path,
     out_dir: &Path,
     release_url_base: Option<&str>,
+    force: bool,
 ) -> Result<(), Box<dyn Error>> {
     let manifest: Manifest = toml::from_str(&fs::read_to_string(manifest_path).map_err(
         |e| format!("cannot read manifest {}: {e}", manifest_path.display()),
@@ -92,10 +129,34 @@ pub fn cmd_batch(
     let tmp_dir = out_dir.join(".tmp");
     fs::create_dir_all(&tmp_dir)?;
 
-    let mut built: Vec<IndexRegion> = Vec::new();
-    let mut skipped: Vec<(String, String)> = Vec::new();
+    let existing = load_existing_index(&out_dir.join("index.json"));
+
+    let mut index_entries: Vec<IndexRegion> = Vec::new();
+    let mut built_count = 0u32;
+    let mut skipped_count = 0u32;
+    let mut failed: Vec<(String, String)> = Vec::new();
     for region in &manifest.regions {
         eprintln!("──── {} ({}) ────", region.id, region.pbf_url);
+
+        if !force {
+            if let Some(cached) = existing.get(&region.id) {
+                let graph_path = out_dir.join(&cached.file);
+                if cached_entry_is_fresh(cached, &graph_path) {
+                    let mut entry = cached.clone();
+                    entry.url = compute_url(release_url_base, &entry.file);
+                    eprintln!(
+                        "  skipped (up to date): {} ({:.1} MB, sha256 {}…)",
+                        entry.file,
+                        entry.bytes as f64 / (1024.0 * 1024.0),
+                        &entry.sha256[..12],
+                    );
+                    index_entries.push(entry);
+                    skipped_count += 1;
+                    continue;
+                }
+            }
+        }
+
         match build_region(region, out_dir, &tmp_dir, release_url_base) {
             Ok(entry) => {
                 eprintln!(
@@ -106,7 +167,8 @@ pub fn cmd_batch(
                     entry.edges,
                     &entry.sha256[..12],
                 );
-                built.push(entry);
+                index_entries.push(entry);
+                built_count += 1;
             }
             Err(RegionError::AbortRun(msg)) => {
                 let _ = fs::remove_dir_all(&tmp_dir);
@@ -114,21 +176,22 @@ pub fn cmd_batch(
             }
             Err(RegionError::Skip(msg)) => {
                 eprintln!("  FAILED, skipping region: {msg}");
-                skipped.push((region.id.clone(), msg));
+                failed.push((region.id.clone(), msg));
             }
         }
     }
     let _ = fs::remove_dir_all(&tmp_dir); // no scratch left behind
 
     let index_path = out_dir.join("index.json");
-    fs::write(&index_path, render_index(&built)?)?;
+    fs::write(&index_path, render_index(&index_entries)?)?;
     eprintln!(
-        "\nwrote {} ({} regions built, {} failed)",
+        "\nwrote {} ({} built, {} skipped up to date, {} failed)",
         index_path.display(),
-        built.len(),
-        skipped.len()
+        built_count,
+        skipped_count,
+        failed.len()
     );
-    for (id, msg) in &skipped {
+    for (id, msg) in &failed {
         eprintln!("  failed: {id}: {msg}");
     }
 
@@ -140,10 +203,44 @@ pub fn cmd_batch(
         roughroute_core::format::VERSION,
     );
 
-    if skipped.is_empty() {
+    if failed.is_empty() {
         Ok(())
     } else {
-        Err(format!("{} region(s) failed to build", skipped.len()).into())
+        Err(format!("{} region(s) failed to build", failed.len()).into())
+    }
+}
+
+/// Read `index.json` at `path` into an id → entry map, if it exists and
+/// parses. Missing or unparsable index means every region is treated as new
+/// (first run, or a corrupted index — safer to rebuild than to trust it).
+fn load_existing_index(path: &Path) -> HashMap<String, IndexRegion> {
+    let Ok(text) = fs::read_to_string(path) else {
+        return HashMap::new();
+    };
+    let Ok(index) = serde_json::from_str::<ExistingIndex>(&text) else {
+        return HashMap::new();
+    };
+    index.regions.into_iter().map(|r| (r.id.clone(), r)).collect()
+}
+
+/// Is `cached` still an accurate description of the file at `graph_path`?
+/// Requires the current format version (a version bump invalidates every
+/// cached entry — the old bytes are objectively obsolete) and an exact
+/// size + sha256 match against the file actually on disk.
+fn cached_entry_is_fresh(cached: &IndexRegion, graph_path: &Path) -> bool {
+    if cached.format_version != roughroute_core::format::VERSION {
+        return false;
+    }
+    let Ok(bytes) = fs::read(graph_path) else {
+        return false;
+    };
+    bytes.len() as u64 == cached.bytes && sha256_hex(&bytes) == cached.sha256
+}
+
+fn compute_url(release_url_base: Option<&str>, file: &str) -> String {
+    match release_url_base {
+        Some(base) => format!("{}/{}", base.trim_end_matches('/'), file),
+        None => file.to_string(),
     }
 }
 
@@ -239,10 +336,7 @@ fn build_region(
         let bytes = fs::read(&graph_path)
             .map_err(|e| RegionError::Skip(format!("cannot re-read graph: {e}")))?;
         let (nodes, edges, bbox) = verify_graph_bytes(&bytes).map_err(RegionError::Skip)?;
-        let url = match release_url_base {
-            Some(base) => format!("{}/{}", base.trim_end_matches('/'), file),
-            None => file.clone(),
-        };
+        let url = compute_url(release_url_base, &file);
         Ok(IndexRegion {
             id: region.id.clone(),
             name: region.name.clone(),
@@ -254,6 +348,7 @@ fn build_region(
             bbox,
             file,
             source_pbf_url: region.pbf_url.clone(),
+            format_version: roughroute_core::format::VERSION,
         })
     });
 
@@ -432,9 +527,8 @@ mod tests {
         assert!(verify_graph_bytes(&empty.to_bytes()).is_err());
     }
 
-    #[test]
-    fn index_json_has_the_d17_shape() {
-        let entry = IndexRegion {
+    fn sample_entry() -> IndexRegion {
+        IndexRegion {
             id: "cyprus".into(),
             name: "Cyprus".into(),
             file: "cyprus.graph".into(),
@@ -445,7 +539,13 @@ mod tests {
             edges: 4,
             bbox: [34.5, 32.2, 35.7, 34.6],
             source_pbf_url: "https://example.invalid/cyprus.osm.pbf".into(),
-        };
+            format_version: roughroute_core::format::VERSION,
+        }
+    }
+
+    #[test]
+    fn index_json_has_the_d17_shape() {
+        let entry = sample_entry();
         let json = render_index(std::slice::from_ref(&entry)).unwrap();
         let v: serde_json::Value = serde_json::from_str(&json).unwrap();
         assert_eq!(v["schema_version"], 1);
@@ -454,6 +554,82 @@ mod tests {
         assert_eq!(v["regions"][0]["id"], "cyprus");
         assert_eq!(v["regions"][0]["sha256"].as_str().unwrap().len(), 64);
         assert_eq!(v["regions"][0]["bbox"].as_array().unwrap().len(), 4);
+        assert_eq!(v["regions"][0]["format_version"], roughroute_core::format::VERSION);
+    }
+
+    #[test]
+    fn cached_entry_matches_file_on_disk_is_fresh() {
+        let dir = std::env::temp_dir().join(format!("rr-batch-test-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("cyprus.graph");
+        let bytes = b"pretend graph bytes";
+        fs::write(&path, bytes).unwrap();
+
+        let mut entry = sample_entry();
+        entry.bytes = bytes.len() as u64;
+        entry.sha256 = sha256_hex(bytes);
+        assert!(cached_entry_is_fresh(&entry, &path));
+
+        // Wrong format version: never fresh, even with matching bytes.
+        let mut stale_version = entry.clone();
+        stale_version.format_version = 0;
+        assert!(!cached_entry_is_fresh(&stale_version, &path));
+
+        // Bytes on disk changed underneath the recorded hash.
+        fs::write(&path, b"different content, same length!!!!!").unwrap();
+        let mut wrong_hash = entry.clone();
+        wrong_hash.bytes = "different content, same length!!!!!".len() as u64;
+        assert!(!cached_entry_is_fresh(&wrong_hash, &path));
+
+        // File missing entirely.
+        fs::remove_file(&path).unwrap();
+        assert!(!cached_entry_is_fresh(&entry, &path));
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn existing_index_round_trips_and_tolerates_missing_format_version() {
+        let dir = std::env::temp_dir().join(format!("rr-batch-idx-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("index.json");
+
+        // Fresh schema (current writer).
+        let entry = sample_entry();
+        fs::write(&path, render_index(std::slice::from_ref(&entry)).unwrap()).unwrap();
+        let loaded = load_existing_index(&path);
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded["cyprus"].format_version, roughroute_core::format::VERSION);
+
+        // Pre-incremental schema (no format_version field at all): parses,
+        // defaults to 0, so cached_entry_is_fresh always rejects it.
+        let old_schema = r#"{"schema_version":1,"format_version":2,
+            "attribution":"x","regions":[{"id":"malta","name":"Malta",
+            "file":"malta.graph","url":"u","bytes":1,"sha256":"ab",
+            "nodes":1,"edges":1,"bbox":[0.0,0.0,0.0,0.0],
+            "source_pbf_url":"u"}]}"#;
+        fs::write(&path, old_schema).unwrap();
+        let loaded = load_existing_index(&path);
+        assert_eq!(loaded["malta"].format_version, 0);
+
+        // Missing file entirely: empty map, not an error.
+        let missing = dir.join("does-not-exist.json");
+        assert!(load_existing_index(&missing).is_empty());
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn compute_url_uses_base_or_falls_back_to_bare_file() {
+        assert_eq!(
+            compute_url(Some("https://example.invalid/dl/"), "cyprus.graph"),
+            "https://example.invalid/dl/cyprus.graph"
+        );
+        assert_eq!(
+            compute_url(Some("https://example.invalid/dl"), "cyprus.graph"),
+            "https://example.invalid/dl/cyprus.graph"
+        );
+        assert_eq!(compute_url(None, "cyprus.graph"), "cyprus.graph");
     }
 
     #[test]
@@ -475,7 +651,10 @@ mod tests {
     #[test]
     fn hard_max_pbf_ceiling_is_800mb() {
         // Pin the constant so a casual edit doesn't silently loosen the
-        // safety gate.
+        // safety gate. Briefly raised to 1.2 GB for an Austria attempt
+        // (D18), reverted the same day (2026-07-03) after that build was
+        // OOM-killed — a memory ceiling this disk-focused gate can't help
+        // with anyway.
         assert_eq!(HARD_MAX_PBF_BYTES, 800_000_000);
     }
 
