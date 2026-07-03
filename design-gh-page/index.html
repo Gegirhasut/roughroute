@@ -36,14 +36,28 @@
   a{color:inherit;text-decoration:none}
   code,.mono{font-family:'Space Mono',ui-monospace,monospace}
 
-  /* ---------- background graph layer ---------- */
+  /* ---------- hero background graph (confined to the hero, quiet) ----------
+     Lives INSIDE the hero (not a fixed full-page layer), so it scrolls away
+     with the hero instead of sitting still under the content — that's what
+     kills the scroll shimmer. Full-viewport width via a centered break-out,
+     hero height only. z-index:-1 keeps it behind the hero's own text. */
   .graph-bg{
-    position:fixed;inset:0;z-index:0;pointer-events:none;
-    opacity:0.62;
+    position:absolute;top:0;left:50%;transform:translateX(-50%);
+    /* Definite width AND height: an <svg> with a viewBox derives an intrinsic
+       height from its aspect ratio the moment only width is set, which would
+       let it grow past the hero. height:100% pins it to the hero box. */
+    width:100vw;height:100%;z-index:-1;pointer-events:none;
+    opacity:0.6;overflow:hidden;
   }
-  .graph-bg::after{ /* vignette so content stays legible */
-    content:"";position:absolute;inset:0;
-    background:radial-gradient(ellipse at 50% 30%, transparent 0%, var(--ink) 78%);
+  /* Fades the graph to solid ink toward the hero's edges and bottom, so no
+     line ever reaches the content sections or the footer, and keeps the hero
+     text legible. Sits at the same layer as the graph, behind the text. */
+  .graph-veil{
+    position:absolute;top:0;bottom:0;left:50%;transform:translateX(-50%);
+    width:100vw;z-index:-1;pointer-events:none;
+    background:
+      radial-gradient(ellipse 72% 62% at 50% 38%, transparent 0%, rgba(11,16,20,0.45) 62%, var(--ink) 100%),
+      linear-gradient(180deg, transparent 58%, var(--ink) 97%);
   }
 
   .wrap{position:relative;z-index:1;max-width:var(--maxw);margin:0 auto;padding:0 24px}
@@ -116,10 +130,11 @@
   .btn.ghost:hover{border-color:var(--route);color:var(--route)}
 
   /* ---------- section frame ---------- */
+  /* Solid ink — no transparency or backdrop-blur. The graph is confined to
+     the hero now, so nothing shows through, and a solid fill can't shimmer. */
   section{
     position:relative;z-index:1;padding:88px 0;border-top:1px solid var(--line);
-    background:linear-gradient(180deg, rgba(11,16,20,0.82) 0%, rgba(11,16,20,0.92) 12%, rgba(11,16,20,0.92) 88%, rgba(11,16,20,0.82) 100%);
-    backdrop-filter:blur(2px);-webkit-backdrop-filter:blur(2px);
+    background:var(--ink);
   }
   .sec-head{display:flex;flex-direction:column;gap:14px;margin-bottom:44px}
   .sec-head h2{font-size:clamp(28px,4vw,40px);font-weight:600;letter-spacing:-0.02em;line-height:1.05}
@@ -167,7 +182,7 @@
   .region .sub{font-family:'Space Mono',monospace;font-size:11px;color:var(--muted);margin-top:2px}
 
   /* ---------- footer ---------- */
-  footer{position:relative;z-index:1;border-top:1px solid var(--line);padding:54px 0 70px}
+  footer{position:relative;z-index:1;border-top:1px solid var(--line);padding:54px 0 70px;background:var(--ink)}
   .foot-grid{display:flex;justify-content:space-between;flex-wrap:wrap;gap:28px}
   .foot-grid a{color:var(--muted);font-family:'Space Mono',monospace;font-size:13px}
   .foot-grid a:hover{color:var(--route)}
@@ -198,10 +213,11 @@
 </head>
 <body>
 
-<!-- signature: live road-graph background -->
-<svg class="graph-bg" id="graphbg" dir="ltr" preserveAspectRatio="xMidYMid slice" aria-hidden="true"></svg>
-
 <header class="hero">
+  <!-- signature: live road-graph background, confined to the hero -->
+  <svg class="graph-bg" id="graphbg" dir="ltr" preserveAspectRatio="xMidYMid slice" aria-hidden="true"></svg>
+  <div class="graph-veil" aria-hidden="true"></div>
+
   <div class="topbar">
     <div class="brand">rough<b>route</b></div>
     <nav>
@@ -505,28 +521,30 @@ roughroute <span class="g">route</span> --graph cyprus.graph --profile car \
     route.setAttribute('d', d);
     route.setAttribute('fill','none');
     route.setAttribute('stroke','#7bd88f');
-    route.setAttribute('stroke-width','2.4');
+    route.setAttribute('stroke-width','1.5');   // thinner: ambient, not foreground
     route.setAttribute('stroke-linecap','round');
     route.setAttribute('stroke-linejoin','round');
-    route.setAttribute('opacity','0.9');
+    route.setAttribute('opacity','0.7');        // dimmer at rest
     route.setAttribute('filter','url(#glow)');
     svg.appendChild(route);
 
-    // glow filter
+    // glow filter — soft halo, toned well down from the old bright bloom
     const defs=document.createElementNS(NS,'defs');
-    defs.innerHTML = '<filter id="glow" x="-20%" y="-20%" width="140%" height="140%"><feGaussianBlur stdDeviation="3" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>';
+    defs.innerHTML = '<filter id="glow" x="-20%" y="-20%" width="140%" height="140%"><feGaussianBlur stdDeviation="1.4" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>';
     svg.insertBefore(defs, svg.firstChild);
 
-    // endpoints (waypoint markers)
+    // endpoints (waypoint markers) — subtler amber, still a cartographic hint
     [path[0], path[path.length-1]].forEach(p=>{
       const n=nodes[p];
       const ring=document.createElementNS(NS,'circle');
-      ring.setAttribute('cx',n.x); ring.setAttribute('cy',n.y); ring.setAttribute('r',5.5);
-      ring.setAttribute('fill','none'); ring.setAttribute('stroke','#e8c07d'); ring.setAttribute('stroke-width','1.6');
+      ring.setAttribute('cx',n.x); ring.setAttribute('cy',n.y); ring.setAttribute('r',4.5);
+      ring.setAttribute('fill','none'); ring.setAttribute('stroke','#e8c07d'); ring.setAttribute('stroke-width','1.2');
+      ring.setAttribute('opacity','0.6');
       svg.appendChild(ring);
       const dot=document.createElementNS(NS,'circle');
-      dot.setAttribute('cx',n.x); dot.setAttribute('cy',n.y); dot.setAttribute('r',2.2);
+      dot.setAttribute('cx',n.x); dot.setAttribute('cy',n.y); dot.setAttribute('r',1.8);
       dot.setAttribute('fill','#e8c07d');
+      dot.setAttribute('opacity','0.72');
       svg.appendChild(dot);
     });
 
