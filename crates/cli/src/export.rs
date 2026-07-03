@@ -53,13 +53,11 @@ struct GeoJsonGeometry {
 /// opposite to the `[lat, lon]` used by the contract, the Rust API, and every
 /// internal structure. The flip happens here and nowhere else.
 pub fn to_geojson(route: &RouteResult) -> Result<String, serde_json::Error> {
-    let mut coordinates: Vec<[f64; 2]> =
+    // RFC 7946 requires a LineString to have at least two positions;
+    // `RouteResult::line` already guarantees ≥2 (a degenerate route is a
+    // two-point zero-length line), so no padding is needed here.
+    let coordinates: Vec<[f64; 2]> =
         route.line.iter().map(|&[lat, lon]| [lon, lat]).collect(); // ← the flip
-    // RFC 7946 requires a LineString to have at least two positions; a fully
-    // degenerate route (all waypoints snapped to one node) repeats its point.
-    if coordinates.len() == 1 {
-        coordinates.push(coordinates[0]);
-    }
     serde_json::to_string(&GeoJsonFeature {
         kind: "Feature",
         properties: GeoJsonProperties { meters: route.meters, fallback: route.fallback },
@@ -120,8 +118,11 @@ mod tests {
     }
 
     #[test]
-    fn geojson_pads_degenerate_single_point_line() {
-        let route = RouteResult { line: vec![[34.7, 33.0]], meters: 0.0, fallback: false };
+    fn geojson_degenerate_line_is_a_valid_two_position_linestring() {
+        // A degenerate route from the router is a two-point zero-length line;
+        // GeoJSON passes it through as a valid (RFC 7946 ≥2) LineString.
+        let route =
+            RouteResult { line: vec![[34.7, 33.0], [34.7, 33.0]], meters: 0.0, fallback: false };
         let json = to_geojson(&route).unwrap();
         let v: serde_json::Value = serde_json::from_str(&json).unwrap();
         assert_eq!(v["geometry"]["coordinates"].as_array().unwrap().len(), 2);

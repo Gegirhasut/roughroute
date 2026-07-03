@@ -144,6 +144,21 @@ pub fn build_graph_with_options(
         })
         .collect();
 
+    // Reject a region whose longitude span exceeds 180°: it either crosses the
+    // antimeridian or is more than half the globe wide. The snapping
+    // projection (a local equirectangular frame) is wrong across the ±180°
+    // seam, so building such a region would silently misroute near it. Fail
+    // loudly instead — full antimeridian support is out of scope (see the
+    // "Known limitations" note in the README / docs/DECISIONS.md).
+    if let (Some(min_lon), Some(max_lon)) =
+        (nodes.iter().map(|n| n[1]).min(), nodes.iter().map(|n| n[1]).max())
+    {
+        // 180° in fixed-point 1e7.
+        if (max_lon as i64 - min_lon as i64) > 1_800_000_000 {
+            return Err(BuildError::AntimeridianSpanning);
+        }
+    }
+
     // 3. Directed edges, both directions per segment (v1 ignores `oneway`).
     let mut directed: Vec<(u32, u32, u32, u8)> = Vec::with_capacity(segments.len() * 2);
     for &(a, b, access) in &segments {
@@ -401,6 +416,23 @@ mod tests {
 
     fn coords(entries: &[(i64, f64, f64)]) -> BTreeMap<i64, [f64; 2]> {
         entries.iter().map(|&(id, lat, lon)| (id, [lat, lon])).collect()
+    }
+
+    #[test]
+    fn antimeridian_spanning_region_is_rejected() {
+        // A way from +179° to -179° spans ~358° of longitude: refuse it
+        // rather than build a graph the snapping projection misroutes near.
+        let ways = vec![RawWay { node_ids: vec![10, 20], access: ACCESS_ALL }];
+        let coords = coords(&[(10, 51.0, 179.0), (20, 51.0, -179.0)]);
+        assert!(matches!(build_graph(&ways, &coords), Err(BuildError::AntimeridianSpanning)));
+    }
+
+    #[test]
+    fn wide_but_sub_180_region_is_accepted() {
+        // Contiguous-US-ish span (~59°) is well under the 180° limit.
+        let ways = vec![RawWay { node_ids: vec![10, 20], access: ACCESS_ALL }];
+        let coords = coords(&[(10, 40.0, -125.0), (20, 40.0, -66.0)]);
+        assert!(build_graph(&ways, &coords).is_ok());
     }
 
     #[test]

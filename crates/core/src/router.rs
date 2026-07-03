@@ -90,7 +90,9 @@ pub struct RouteResult {
     /// The polyline as `[lat, lon]` degree pairs, dense along road geometry:
     /// every graph node passed *and* every intermediate geometry point of
     /// every traversed (collapsed) edge, in travel order. Consecutive
-    /// duplicates are removed at leg junctions.
+    /// duplicates are removed at leg junctions. Always contains at least two
+    /// points — a fully-degenerate route (all waypoints on one spot) is a
+    /// two-point, zero-length line rather than a lone coordinate.
     pub line: Vec<[f64; 2]>,
     /// Total length in meters: the haversine sum over `line` itself (spec
     /// §8.5), so it always matches the returned geometry.
@@ -221,6 +223,14 @@ impl<'g> Router<'g> {
         // Leg boundaries and t = 0/1 projections coincide exactly with their
         // neighbors; one dedup pass keeps the line free of zero-length steps.
         line.dedup();
+        // A fully-degenerate route (every waypoint snapped to one point)
+        // collapses to a single coordinate. Emit it as a two-point,
+        // zero-length polyline so `line` is always a valid ≥2-point line for
+        // every consumer (the JSON contract, WASM, FFI, and GeoJSON alike),
+        // rather than a lone point that each would have to special-case.
+        if line.len() == 1 {
+            line.push(line[0]);
+        }
 
         let meters = line
             .windows(2)
@@ -640,9 +650,10 @@ mod tests {
         let router = Router::new(&g, RouteOptions::default());
         let res = router.route(&[wp(&g, 0), wp(&g, 0), wp(&g, 2)]).unwrap();
         assert_eq!(res.line, vec![wp(&g, 0), wp(&g, 1), wp(&g, 2)]);
-        // Fully degenerate: both waypoints snap to the same node.
+        // Fully degenerate: both waypoints snap to the same node. The line is
+        // a two-point, zero-length polyline (never a lone coordinate).
         let res = router.route(&[wp(&g, 0), wp(&g, 0)]).unwrap();
-        assert_eq!(res.line, vec![wp(&g, 0)]);
+        assert_eq!(res.line, vec![wp(&g, 0), wp(&g, 0)]);
         assert_eq!(res.meters, 0.0);
         assert!(!res.fallback);
     }

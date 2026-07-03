@@ -92,9 +92,13 @@ fn check_result_invariants(route: &roughroute_core::RouteResult) {
     for &[lat, lon] in &route.line {
         assert!((-90.0..=90.0).contains(&lat) && (-180.0..=180.0).contains(&lon));
     }
-    assert!(!route.line.is_empty());
-    // No consecutive duplicate points (junctions deduped).
-    assert!(route.line.windows(2).all(|w| w[0] != w[1]));
+    // Always a valid ≥2-point polyline.
+    assert!(route.line.len() >= 2);
+    // No consecutive duplicate points (junctions deduped) — except the one
+    // legitimate case: a fully-degenerate route is a two-point zero-length
+    // line where both points coincide.
+    let degenerate = route.line.len() == 2 && route.line[0] == route.line[1];
+    assert!(degenerate || route.line.windows(2).all(|w| w[0] != w[1]));
 }
 
 proptest! {
