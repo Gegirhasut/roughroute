@@ -1,0 +1,30 @@
+# Build artifacts. The workspace redirects target-dir off-repo via
+# .cargo/config.toml, but keep this as a defensive fallback.
+/target
+
+# Source OSM extracts: build-time input only, never checked in except the
+# small, reproducible test fixture.
+*.osm.pbf
+!testdata/cyprus.osm.pbf
+
+# Built region graphs: reproducible from source, never checked in.
+*.graph
+
+# Batch-build output (roughroute batch --out-dir dist).
+/dist/
+
+# WASM build output.
+/pkg/
+*.wasm
+*.wasm.d.ts
+
+# Generated Kotlin/UniFFI bindings.
+/bindings/
+
+# Editor/OS cruft.
+.DS_Store
+*.swp
+
+# Scratch/temp.
+*.tmp
+.tmp/

@@ -1,0 +1,6 @@
+# This checkout lives on a VirtualBox shared folder (vboxsf), which breaks
+# Cargo's incremental compilation ("Text file busy" when renaming dep-graph
+# files) and is slow for build I/O. Keep build artifacts on the VM's local
+# disk instead. Machine-specific: adjust or delete on other setups.
+[build]
+target-dir = "/home/vagrant/.cache/roughroute-target"
