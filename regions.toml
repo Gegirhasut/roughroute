@@ -39,3 +39,33 @@ pbf_url = "https://download.geofabrik.de/europe/switzerland-latest.osm.pbf"
 id = "kenya"
 name = "Kenya"
 pbf_url = "https://download.geofabrik.de/africa/kenya-latest.osm.pbf"
+
+[[region]]
+id = "luxembourg"
+name = "Luxembourg"
+pbf_url = "https://download.geofabrik.de/europe/luxembourg-latest.osm.pbf"
+
+[[region]]
+id = "moldova"
+name = "Moldova"
+pbf_url = "https://download.geofabrik.de/europe/moldova-latest.osm.pbf"
+
+[[region]]
+id = "estonia"
+name = "Estonia"
+pbf_url = "https://download.geofabrik.de/europe/estonia-latest.osm.pbf"
+
+[[region]]
+id = "latvia"
+name = "Latvia"
+pbf_url = "https://download.geofabrik.de/europe/latvia-latest.osm.pbf"
+
+[[region]]
+id = "iceland"
+name = "Iceland"
+pbf_url = "https://download.geofabrik.de/europe/iceland-latest.osm.pbf"
+
+[[region]]
+id = "montenegro"
+name = "Montenegro"
+pbf_url = "https://download.geofabrik.de/europe/montenegro-latest.osm.pbf"
