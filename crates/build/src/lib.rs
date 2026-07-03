@@ -40,7 +40,7 @@ impl core::fmt::Display for BuildError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             BuildError::TooLarge => {
-                write!(f, "road network too large for format v1 (u32 indices)")
+                write!(f, "road network too large for the .graph format (exceeds u32 node/edge indices)")
             }
             BuildError::Graph(e) => write!(f, "graph assembly failed: {e}"),
             BuildError::Pbf(e) => write!(f, "failed to read .osm.pbf: {e}"),

@@ -36,6 +36,10 @@ pub enum RouteError {
         /// Index of the leg whose endpoints are not connected.
         segment: usize,
     },
+    /// [`RouteOptions::max_snap_meters`] is not a usable cutoff (NaN, negative,
+    /// or infinite). Returned up front rather than silently making every
+    /// waypoint snap fail.
+    InvalidMaxSnapMeters,
 }
 
 impl core::fmt::Display for RouteError {
@@ -51,6 +55,9 @@ impl core::fmt::Display for RouteError {
                 "no path between waypoints {segment} and {} (fallback disabled)",
                 segment + 1
             ),
+            RouteError::InvalidMaxSnapMeters => {
+                write!(f, "max_snap_meters must be a finite, non-negative number")
+            }
         }
     }
 }
@@ -165,6 +172,12 @@ impl<'g> Router<'g> {
     pub fn route(&self, waypoints: &[[f64; 2]]) -> Result<RouteResult, RouteError> {
         if waypoints.len() < 2 {
             return Err(RouteError::TooFewWaypoints);
+        }
+        // A NaN/negative/inf cutoff would make every `meters <= cutoff` snap
+        // check fail; reject it explicitly instead of returning a misleading
+        // SnapTooFar for every waypoint.
+        if !self.opts.max_snap_meters.is_finite() || self.opts.max_snap_meters < 0.0 {
+            return Err(RouteError::InvalidMaxSnapMeters);
         }
 
         let mask = self.opts.profile.mask();
@@ -697,6 +710,28 @@ mod tests {
         let router = Router::new(&g, RouteOptions::default());
         let err = router.route(&[[35.0, 33.0], [35.1, 33.0]]).unwrap_err();
         assert!(matches!(err, RouteError::SnapTooFar { index: 0, .. }));
+    }
+
+    #[test]
+    fn invalid_max_snap_meters_is_rejected_up_front() {
+        let g = test_graph();
+        for bad in [f64::NAN, -1.0, f64::INFINITY] {
+            let router = Router::new(
+                &g,
+                RouteOptions { max_snap_meters: bad, ..RouteOptions::default() },
+            );
+            assert_eq!(
+                router.route(&[wp(&g, 0), wp(&g, 2)]),
+                Err(RouteError::InvalidMaxSnapMeters),
+                "cutoff {bad} should be rejected"
+            );
+        }
+        // Zero is a valid (if useless) cutoff: not rejected up front.
+        let router = Router::new(&g, RouteOptions { max_snap_meters: 0.0, ..RouteOptions::default() });
+        assert!(!matches!(
+            router.route(&[wp(&g, 0), wp(&g, 2)]),
+            Err(RouteError::InvalidMaxSnapMeters)
+        ));
     }
 
     // ---- F10 edge snapping (M5) ----

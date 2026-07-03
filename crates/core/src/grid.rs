@@ -136,10 +136,14 @@ impl Grid {
         let cell_h_deg = (lat_span / f64::from(rows)).max(1e-12);
 
         // Conservative (smallest) metric size of a cell anywhere in the bbox:
-        // use the latitude with the smallest cos for the width.
+        // use the latitude with the smallest cos for the width. This feeds the
+        // ring-search termination bound, so it must under- or exactly estimate
+        // a haversine distance — hence the sphere-consistent constant rather
+        // than the WGS-84 lon value (which slightly over-estimates the sphere
+        // and could stop a search one ring early).
         let cos_worst = f64::max(min_lat.abs(), max_lat.abs()).to_radians().cos().max(0.0);
-        let cell_w_m = cell_w_deg * geo::METERS_PER_DEG_LON_EQUATOR * cos_worst;
-        let cell_h_m = cell_h_deg * geo::METERS_PER_DEG_LAT;
+        let cell_w_m = cell_w_deg * geo::METERS_PER_DEG_SPHERE * cos_worst;
+        let cell_h_m = cell_h_deg * geo::METERS_PER_DEG_SPHERE;
         let min_cell_m = cell_w_m.min(cell_h_m).max(MIN_CELL_METERS);
 
         let mut grid = Grid {

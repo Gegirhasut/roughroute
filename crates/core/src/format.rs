@@ -129,6 +129,31 @@ fn write_varint(out: &mut Vec<u8>, mut v: u32) {
     }
 }
 
+/// Number of LEB128 bytes `v` encodes to (1..=5).
+#[inline]
+fn varint_len(mut v: u32) -> usize {
+    let mut n = 1;
+    while v >= 0x80 {
+        v >>= 7;
+        n += 1;
+    }
+    n
+}
+
+/// Exact byte length the geometry pool delta-encodes to, without allocating.
+/// Used at construction to guarantee `geo_bytes` (a `u32` header field) can't
+/// overflow, so [`serialize`] never silently truncates it.
+pub(crate) fn encoded_geometry_len(points: &[[i32; 2]]) -> u64 {
+    let mut total = 0u64;
+    let mut prev = [0i32, 0i32];
+    for &[lat, lon] in points {
+        total += varint_len(zigzag_encode(lat.wrapping_sub(prev[0]))) as u64;
+        total += varint_len(zigzag_encode(lon.wrapping_sub(prev[1]))) as u64;
+        prev = [lat, lon];
+    }
+    total
+}
+
 /// Read one LEB128 varint starting at `*at`, advancing `*at` past it. A u32
 /// needs at most 5 continuation bytes; a 6th means malformed input rather
 /// than a shift overflow.
@@ -284,6 +309,12 @@ pub(crate) fn serialize(parts: &Parts) -> Vec<u8> {
     for v in parts.bbox_fixed {
         out.extend_from_slice(&v.to_le_bytes());
     }
+    // Both casts are lossless: `Graph::assemble` rejects any graph with more
+    // than `u32::MAX` geometry points or whose encoded pool would exceed
+    // `u32::MAX` bytes, so a serializable `Parts` always fits (asserted in
+    // debug builds).
+    debug_assert!(parts.geometry.len() <= u32::MAX as usize);
+    debug_assert!(geometry_bytes.len() <= u32::MAX as usize);
     out.extend_from_slice(&(parts.geometry.len() as u32).to_le_bytes());
     out.extend_from_slice(&(geometry_bytes.len() as u32).to_le_bytes());
     for [lat, lon] in &parts.nodes {
@@ -487,6 +518,17 @@ mod tests {
             count in 0u32..20,
         ) {
             let _ = decode_geometry(&bytes, count);
+        }
+
+        /// The cheap length helper used by the serialization guard must equal
+        /// the actual encoded length for any pool (so the u32-fit check is
+        /// precise, not an over- or under-estimate).
+        #[test]
+        fn encoded_geometry_len_matches_actual_encoding(
+            points in prop::collection::vec((any::<i32>(), any::<i32>()), 0..200)
+        ) {
+            let points: Vec<[i32; 2]> = points.into_iter().map(|(a, b)| [a, b]).collect();
+            prop_assert_eq!(encoded_geometry_len(&points), encode_geometry(&points).len() as u64);
         }
     }
 }

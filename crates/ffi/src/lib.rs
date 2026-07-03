@@ -79,10 +79,12 @@ impl From<roughroute_core::RouteError> for RouterError {
         match e {
             roughroute_core::RouteError::TooFewWaypoints => RouterError::TooFewWaypoints,
             roughroute_core::RouteError::SnapTooFar { .. } => RouterError::SnapTooFar,
-            // NoPath can only surface with fallback disabled; this wrapper
-            // always routes with the spec default (fallback on), so this arm
-            // is unreachable in practice but total for safety.
-            roughroute_core::RouteError::NoPath { .. } => RouterError::SnapTooFar,
+            // NoPath (needs fallback disabled) and InvalidMaxSnapMeters (needs
+            // a bad cutoff) can't arise here: this wrapper always routes with
+            // the spec defaults (fallback on, cutoff 200 m). Mapped for
+            // totality onto the closest of the FFI's three fixed variants.
+            roughroute_core::RouteError::NoPath { .. }
+            | roughroute_core::RouteError::InvalidMaxSnapMeters => RouterError::SnapTooFar,
         }
     }
 }

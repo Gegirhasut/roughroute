@@ -125,6 +125,16 @@ impl Graph {
         edges: Vec<Edge>,
         geometry: Vec<[i32; 2]>,
     ) -> Result<Graph, GraphError> {
+        // The delta-encoded geometry section's byte length is a `u32` header
+        // field (`geo_bytes`). Reject a pool that would encode past that so
+        // `to_bytes` can never silently truncate it. Only checked here, on
+        // arbitrary caller input: a graph from `from_bytes` already carries a
+        // valid `u32` `geo_bytes` and re-serializes byte-identically, so it
+        // needs no re-check (and this avoids the cost on every load). Only
+        // physically-unreachable inputs (a multi-GB pool) are rejected.
+        if format::encoded_geometry_len(&geometry) > u32::MAX as u64 {
+            return Err(GraphError::Malformed("geometry pool too large to serialize"));
+        }
         let mut bbox_fixed = [0i32; 4];
         let mut points = nodes.iter().chain(geometry.iter());
         if let Some(first) = points.next() {

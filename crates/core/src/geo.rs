@@ -56,6 +56,17 @@ pub const METERS_PER_DEG_LAT: f64 = 110_574.0;
 /// Meters per degree of longitude at the equator (scale by `cos(lat)`).
 pub const METERS_PER_DEG_LON_EQUATOR: f64 = 111_320.0;
 
+/// Meters per degree on the haversine sphere of radius [`EARTH_RADIUS_M`]
+/// (a latitude degree, and a longitude degree at the equator scaled by
+/// `cos(lat)`). Unlike the WGS-84 constants above, this is *consistent with*
+/// [`haversine_m`]: a degree measured by that function equals exactly this
+/// times the relevant cosine. Use it wherever a distance bound must under- or
+/// exactly estimate a haversine distance — e.g. a spatial-index ring
+/// lower bound, where the WGS-84 lon value (which slightly over-estimates the
+/// sphere) could otherwise stop a search one ring early.
+pub const METERS_PER_DEG_SPHERE: f64 =
+    2.0 * std::f64::consts::PI * EARTH_RADIUS_M / 360.0;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -66,6 +77,17 @@ mod tests {
             let back = fixed_to_deg(deg_to_fixed(deg));
             assert!((back - deg).abs() <= 0.5 / FIXED_POINT_SCALE, "{deg} -> {back}");
         }
+    }
+
+    #[test]
+    fn sphere_constant_matches_haversine_and_is_a_true_bound() {
+        // A latitude degree measured by haversine equals METERS_PER_DEG_SPHERE
+        // to within rounding — that's the property the ring bound relies on.
+        let one_deg = haversine_m(34.0, 33.0, 35.0, 33.0);
+        assert!((one_deg - METERS_PER_DEG_SPHERE).abs() < 1e-3, "{one_deg}");
+        // And it is a true lower bound vs the WGS-84 lon constant that the
+        // ring termination previously used (which over-estimated the sphere).
+        const { assert!(METERS_PER_DEG_SPHERE < METERS_PER_DEG_LON_EQUATOR) };
     }
 
     #[test]

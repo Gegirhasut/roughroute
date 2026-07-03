@@ -131,6 +131,10 @@ proptest! {
                 prop_assert!(!allow_fallback);
                 prop_assert!(segment + 1 < waypoints.len());
             }
+            // The test always uses a valid 200 m cutoff.
+            Err(RouteError::InvalidMaxSnapMeters) => {
+                prop_assert!(false, "valid options never produce InvalidMaxSnapMeters")
+            }
         }
     }
 
