@@ -1,0 +1,31 @@
+# roughroute region manifest (docs/DECISIONS.md D17).
+#
+# Each region becomes one published `<id>.graph`. Add a region by appending a
+# block and running `roughroute batch` (see README "Regional graphs").
+# Keep regions small-ish; the batch tool builds them one at a time and deletes
+# each source .pbf after building, but the .pbf itself must fit on disk.
+
+[[region]]
+id = "cyprus"
+name = "Cyprus"
+pbf_url = "https://download.geofabrik.de/europe/cyprus-latest.osm.pbf"
+
+[[region]]
+id = "malta"
+name = "Malta"
+pbf_url = "https://download.geofabrik.de/europe/malta-latest.osm.pbf"
+
+[[region]]
+id = "andorra"
+name = "Andorra"
+pbf_url = "https://download.geofabrik.de/europe/andorra-latest.osm.pbf"
+
+# Mid-size scaling test (2026-07-03): .pbf probed at 309.6 MB, comfortably
+# under the 800 MB hard safety ceiling in crates/cli/src/batch.rs. This is
+# the largest region built in this environment — an attempt at Austria
+# (803.1 MB pbf) was OOM-killed on this dev VM's 5.8 GB RAM (see
+# docs/DECISIONS.md D18); dropped rather than pursued further.
+[[region]]
+id = "slovenia"
+name = "Slovenia"
+pbf_url = "https://download.geofabrik.de/europe/slovenia-latest.osm.pbf"

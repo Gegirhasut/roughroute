@@ -16,6 +16,9 @@ roughroute-build.workspace = true
 clap.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-# Build-time-only downloads for `build --pbf-url` (spec §3); the routing
-# runtime never touches the network.
+# Build-time-only downloads for `build --pbf-url` and `batch` (spec §3); the
+# routing runtime never touches the network.
 ureq.workspace = true
+# `batch` subcommand only: manifest parsing + index hashing (D17).
+toml.workspace = true
+sha2.workspace = true

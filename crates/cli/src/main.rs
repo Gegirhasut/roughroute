@@ -5,6 +5,7 @@
 //! contract JSON, GeoJSON, or GPX). Route output goes to stdout; diagnostics
 //! go to stderr.
 
+mod batch;
 mod export;
 
 use std::error::Error;
@@ -43,6 +44,22 @@ enum Command {
         /// Profiles to include, comma-separated (ways usable by none are dropped).
         #[arg(long, value_delimiter = ',', default_values = ["car", "foot"])]
         profiles: Vec<CliProfile>,
+    },
+    /// Build, verify, and index every region in the manifest (dev/CI):
+    /// per region download -> build -> verify -> delete the .pbf, then write
+    /// index.json next to the graphs. See README "Regional graphs".
+    Batch {
+        /// Region manifest (docs/DECISIONS.md D17).
+        #[arg(long, default_value = "regions.toml")]
+        manifest: PathBuf,
+        /// Output directory for <id>.graph files and index.json.
+        #[arg(long, default_value = "dist")]
+        out_dir: PathBuf,
+        /// Base URL the graphs will be served from (e.g. a GitHub release
+        /// download URL); index.json falls back to bare file names when
+        /// omitted.
+        #[arg(long)]
+        release_url_base: Option<String>,
     },
     /// Build a route over a .graph and print it to stdout.
     Route {
@@ -99,6 +116,9 @@ fn main() {
 fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
     match cli.command {
         Command::Build { pbf, pbf_url, out, profiles } => cmd_build(pbf, pbf_url, out, &profiles),
+        Command::Batch { manifest, out_dir, release_url_base } => {
+            batch::cmd_batch(&manifest, &out_dir, release_url_base.as_deref())
+        }
         Command::Route { graph, profile, via, format, max_snap_meters, no_fallback } => {
             cmd_route(&graph, profile, &via, format, max_snap_meters, no_fallback)
         }
