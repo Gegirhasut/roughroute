@@ -68,6 +68,14 @@ enum Command {
         /// Rebuild every region even if index.json says it's up to date.
         #[arg(long)]
         force: bool,
+        /// Trust index.json's recorded hash/format_version for a region
+        /// instead of re-reading its .graph file from disk — no local .graph
+        /// needed to decide a skip. For CI, where downloading every published
+        /// graph just to confirm it's unchanged would defeat the point of
+        /// incrementality. Off by default: local runs use the stronger
+        /// disk re-hash. See docs/DECISIONS.md D20 addendum.
+        #[arg(long)]
+        trust_index: bool,
     },
     /// Build a route over a .graph and print it to stdout.
     Route {
@@ -124,8 +132,8 @@ fn main() {
 fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
     match cli.command {
         Command::Build { pbf, pbf_url, out, profiles } => cmd_build(pbf, pbf_url, out, &profiles),
-        Command::Batch { manifest, out_dir, release_url_base, force } => {
-            batch::cmd_batch(&manifest, &out_dir, release_url_base.as_deref(), force)
+        Command::Batch { manifest, out_dir, release_url_base, force, trust_index } => {
+            batch::cmd_batch(&manifest, &out_dir, release_url_base.as_deref(), force, trust_index)
         }
         Command::Route { graph, profile, via, format, max_snap_meters, no_fallback } => {
             cmd_route(&graph, profile, &via, format, max_snap_meters, no_fallback)

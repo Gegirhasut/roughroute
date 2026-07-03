@@ -94,10 +94,14 @@ build scratch adds up. Rules:
   memory-constrained machine even after the disk checks pass (hit this
   building Austria on a 5.8 GB-RAM dev VM; D18). Known gap, not fixed.
 - Region graphs are built/published by CI (M8/D20):
-  `.github/workflows/build-regions.yml` runs `roughroute batch` on a
-  GitHub-hosted runner on a push that changes `regions.toml`, so no local
-  `.pbf` download and the runner RAM clears the local OOM ceiling. It's a
-  thin driver over the incremental batch — **don't reimplement batch logic in
-  YAML**. The runner still can't stream a multi-GB extract (same RAM gap).
+  `.github/workflows/build-regions.yml` runs `roughroute batch --trust-index`
+  on a GitHub-hosted runner on a push that changes `regions.toml`, so no
+  local `.pbf` download and the runner RAM clears the local OOM ceiling.
+  `--trust-index` (D20 addendum) skips a region straight from `index.json`'s
+  recorded hash/format_version — no local `.graph` needed — so CI fetches
+  only the tiny index, not every published graph; local dev keeps the
+  stronger disk re-hash by default. It's a thin driver over the incremental
+  batch — **don't reimplement batch logic in YAML**. The runner still can't
+  stream a multi-GB extract (same RAM gap).
 - Still out of scope: baked spatial index, duration estimate (F11), a RAM
   gate / **streaming build** for `batch` — candidates for later milestones.

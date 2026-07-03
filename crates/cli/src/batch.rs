@@ -7,13 +7,28 @@
 //! `.pbf`s at once; the whole run aborts before a download that could fill
 //! the disk.
 //!
-//! **Incremental** (docs/DECISIONS.md D17 addendum): before touching a
-//! region, its existing `index.json` entry is checked against the file on
-//! disk — same `sha256`/size and `format_version` as the graph currently
-//! written means the region is already up to date, and it is skipped
-//! entirely (no HEAD probe, no download, no rebuild). `--force` bypasses
-//! this for every region. Adding one new region to `regions.toml` therefore
-//! touches only that region on the next run.
+//! **Incremental, two modes** (docs/DECISIONS.md D17 addendum, D20 addendum):
+//! before touching a region, its existing `index.json` entry is checked; if
+//! it's still up to date the region is skipped entirely (no HEAD probe, no
+//! download, no rebuild). `--force` bypasses this for every region.
+//!
+//! - **Default (disk re-hash).** The entry must match the `.graph` file
+//!   actually on disk — same size/sha256 as currently written, same
+//!   `format_version`. Requires the file present locally; this is the
+//!   stronger check and what local/dev use.
+//! - **`--trust-index` (CI).** The entry is trusted from `index.json` alone —
+//!   no local `.graph` needed, no re-hash — provided the region's source URL
+//!   is unchanged and the recorded `format_version` exactly matches the
+//!   current one. This lets CI fetch only the tiny `index.json` (not every
+//!   published `.graph`) to decide what to skip. Trusting the recorded hash
+//!   means trusting that the published release asset actually matches it
+//!   (nobody tampered with it out of band) — acceptable for our own
+//!   CI-published release; see DECISIONS.md D20 for the full trade-off.
+//!
+//! Either way, a missing entry, a corrupt/unparseable `index.json`, or a
+//! `format_version` mismatch always means "must (re)build" — never silently
+//! skipped. Adding one new region to `regions.toml` therefore touches only
+//! that region on the next run.
 
 use std::collections::HashMap;
 use std::error::Error;
@@ -100,6 +115,7 @@ pub fn cmd_batch(
     out_dir: &Path,
     release_url_base: Option<&str>,
     force: bool,
+    trust_index: bool,
 ) -> Result<(), Box<dyn Error>> {
     let manifest: Manifest = toml::from_str(&fs::read_to_string(manifest_path).map_err(
         |e| format!("cannot read manifest {}: {e}", manifest_path.display()),
@@ -118,6 +134,10 @@ pub fn cmd_batch(
     let agent = net::agent();
 
     let existing = load_existing_index(&out_dir.join("index.json"));
+    eprintln!(
+        "mode: {}",
+        if trust_index { "trust-index (CI: no local .graph needed to skip)" } else { "disk re-hash (default)" }
+    );
 
     let mut index_entries: Vec<IndexRegion> = Vec::new();
     let mut built_count = 0u32;
@@ -126,23 +146,19 @@ pub fn cmd_batch(
     for region in &manifest.regions {
         eprintln!("──── {} ({}) ────", region.id, region.pbf_url);
 
-        if !force {
-            if let Some(cached) = existing.get(&region.id) {
-                let graph_path = out_dir.join(&cached.file);
-                if cached_entry_is_fresh(cached, &graph_path) {
-                    let mut entry = cached.clone();
-                    entry.url = compute_url(release_url_base, &entry.file);
-                    eprintln!(
-                        "  skipped (up to date): {} ({:.1} MB, sha256 {}…)",
-                        entry.file,
-                        entry.bytes as f64 / (1024.0 * 1024.0),
-                        &entry.sha256[..12],
-                    );
-                    index_entries.push(entry);
-                    skipped_count += 1;
-                    continue;
-                }
-            }
+        if let Some(entry) =
+            skip_decision(region, &existing, out_dir, release_url_base, trust_index, force)
+        {
+            eprintln!(
+                "  skipped (up to date{}): {} ({:.1} MB, sha256 {}…)",
+                if trust_index { ", trusted index" } else { "" },
+                entry.file,
+                entry.bytes as f64 / (1024.0 * 1024.0),
+                &entry.sha256[..12],
+            );
+            index_entries.push(entry);
+            skipped_count += 1;
+            continue;
         }
 
         match build_region(&agent, region, out_dir, &tmp_dir, release_url_base) {
@@ -223,6 +239,60 @@ fn cached_entry_is_fresh(cached: &IndexRegion, graph_path: &Path) -> bool {
         return false;
     };
     bytes.len() as u64 == cached.bytes && sha256_hex(&bytes) == cached.sha256
+}
+
+/// Is `cached` trustworthy *without* the `.graph` file present (`--trust-index`,
+/// docs/DECISIONS.md D20 addendum)? Three requirements, all must hold:
+///
+/// - `region.pbf_url` still matches `cached.source_pbf_url` — a changed
+///   source means the published graph no longer describes what the manifest
+///   asks to build, regardless of what its hash says.
+/// - `cached.format_version` **exactly** equals the current format version.
+///   Not `<=`: an index entry from a *newer* format than this binary knows
+///   (e.g. a partial rollout) must not be trusted either, only an exact
+///   match is "this is what I would build right now."
+/// - `cached.sha256`/`cached.bytes` look like real recorded values (a
+///   64-char hex hash, a positive size) rather than defaults from a corrupt
+///   or pre-hash schema — this function never re-derives them from bytes (by
+///   design: that's the whole point of not needing the file), so it can only
+///   sanity-check their *shape*, not verify them against anything.
+fn index_entry_is_trustworthy(region: &ManifestRegion, cached: &IndexRegion) -> bool {
+    cached.source_pbf_url == region.pbf_url
+        && cached.format_version == roughroute_core::format::VERSION
+        && cached.bytes > 0
+        && cached.sha256.len() == 64
+        && cached.sha256.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
+/// Whether `region` can be skipped given the previously published
+/// `index.json` entries in `existing`, in either mode. Returns the entry to
+/// carry forward (with a freshly recomputed `url`, in case the release base
+/// changed) when it can; `None` — meaning "(re)build it" — when `force` is
+/// set, no entry exists for this region, or the freshness check for the
+/// active mode fails.
+fn skip_decision(
+    region: &ManifestRegion,
+    existing: &HashMap<String, IndexRegion>,
+    out_dir: &Path,
+    release_url_base: Option<&str>,
+    trust_index: bool,
+    force: bool,
+) -> Option<IndexRegion> {
+    if force {
+        return None;
+    }
+    let cached = existing.get(&region.id)?;
+    let is_fresh = if trust_index {
+        index_entry_is_trustworthy(region, cached)
+    } else {
+        cached_entry_is_fresh(cached, &out_dir.join(&cached.file))
+    };
+    if !is_fresh {
+        return None;
+    }
+    let mut entry = cached.clone();
+    entry.url = compute_url(release_url_base, &entry.file);
+    Some(entry)
 }
 
 fn compute_url(release_url_base: Option<&str>, file: &str) -> String {
@@ -573,6 +643,115 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
     }
 
+    /// A manifest region matching `sample_entry()`'s id and source URL.
+    fn sample_region() -> ManifestRegion {
+        ManifestRegion {
+            id: "cyprus".into(),
+            name: "Cyprus".into(),
+            pbf_url: "https://example.invalid/cyprus.osm.pbf".into(),
+        }
+    }
+
+    #[test]
+    fn index_entry_is_trustworthy_when_source_and_format_match() {
+        assert!(index_entry_is_trustworthy(&sample_region(), &sample_entry()));
+    }
+
+    #[test]
+    fn index_entry_is_untrustworthy_when_source_url_changed() {
+        // The manifest now points at a different .pbf: the published graph
+        // no longer describes what would be built, regardless of its hash.
+        let mut region = sample_region();
+        region.pbf_url = "https://example.invalid/cyprus-renamed.osm.pbf".into();
+        assert!(!index_entry_is_trustworthy(&region, &sample_entry()));
+    }
+
+    #[test]
+    fn index_entry_is_untrustworthy_when_format_version_does_not_match_exactly() {
+        // Older (the normal "format bumped" case): must rebuild.
+        let mut stale = sample_entry();
+        stale.format_version = roughroute_core::format::VERSION - 1;
+        assert!(!index_entry_is_trustworthy(&sample_region(), &stale));
+
+        // Newer (an entry from a format this binary doesn't know): also must
+        // rebuild, not be trusted as "close enough".
+        let mut from_the_future = sample_entry();
+        from_the_future.format_version = roughroute_core::format::VERSION + 1;
+        assert!(!index_entry_is_trustworthy(&sample_region(), &from_the_future));
+    }
+
+    #[test]
+    fn index_entry_is_untrustworthy_when_hash_or_bytes_look_invalid() {
+        let mut zero_bytes = sample_entry();
+        zero_bytes.bytes = 0;
+        assert!(!index_entry_is_trustworthy(&sample_region(), &zero_bytes));
+
+        let mut short_hash = sample_entry();
+        short_hash.sha256 = "ab".into();
+        assert!(!index_entry_is_trustworthy(&sample_region(), &short_hash));
+
+        let mut non_hex_hash = sample_entry();
+        non_hex_hash.sha256 = "z".repeat(64);
+        assert!(!index_entry_is_trustworthy(&sample_region(), &non_hex_hash));
+    }
+
+    #[test]
+    fn skip_decision_trust_index_skips_without_touching_disk() {
+        let existing: HashMap<String, IndexRegion> =
+            [("cyprus".to_string(), sample_entry())].into_iter().collect();
+        // out_dir doesn't exist at all — trust-index mode must not need it.
+        let ghost_dir = Path::new("/nonexistent/does-not-exist-anywhere");
+        let entry = skip_decision(&sample_region(), &existing, ghost_dir, None, true, false);
+        assert!(entry.is_some());
+        assert_eq!(entry.unwrap().id, "cyprus");
+    }
+
+    #[test]
+    fn skip_decision_rebuilds_when_entry_missing_in_either_mode() {
+        let existing: HashMap<String, IndexRegion> = HashMap::new();
+        let region = sample_region();
+        assert!(skip_decision(&region, &existing, Path::new("."), None, true, false).is_none());
+        assert!(skip_decision(&region, &existing, Path::new("."), None, false, false).is_none());
+    }
+
+    #[test]
+    fn skip_decision_force_always_rebuilds_even_when_trustworthy() {
+        let existing: HashMap<String, IndexRegion> =
+            [("cyprus".to_string(), sample_entry())].into_iter().collect();
+        assert!(skip_decision(&sample_region(), &existing, Path::new("."), None, true, true).is_none());
+    }
+
+    #[test]
+    fn skip_decision_trust_index_rebuilds_on_source_or_format_mismatch() {
+        let mut region = sample_region();
+        region.pbf_url = "https://example.invalid/different.osm.pbf".into();
+        let existing: HashMap<String, IndexRegion> =
+            [("cyprus".to_string(), sample_entry())].into_iter().collect();
+        assert!(skip_decision(&region, &existing, Path::new("."), None, true, false).is_none());
+
+        let mut stale = sample_entry();
+        stale.format_version = 0;
+        let existing: HashMap<String, IndexRegion> =
+            [("cyprus".to_string(), stale)].into_iter().collect();
+        assert!(skip_decision(&sample_region(), &existing, Path::new("."), None, true, false).is_none());
+    }
+
+    #[test]
+    fn skip_decision_recomputes_url_from_release_base_when_skipping() {
+        let existing: HashMap<String, IndexRegion> =
+            [("cyprus".to_string(), sample_entry())].into_iter().collect();
+        let entry = skip_decision(
+            &sample_region(),
+            &existing,
+            Path::new("."),
+            Some("https://example.invalid/dl/v2"),
+            true,
+            false,
+        )
+        .unwrap();
+        assert_eq!(entry.url, "https://example.invalid/dl/v2/cyprus.graph");
+    }
+
     #[test]
     fn existing_index_round_trips_and_tolerates_missing_format_version() {
         let dir = std::env::temp_dir().join(format!("rr-batch-idx-{}", std::process::id()));
@@ -600,6 +779,29 @@ mod tests {
         // Missing file entirely: empty map, not an error.
         let missing = dir.join("does-not-exist.json");
         assert!(load_existing_index(&missing).is_empty());
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn corrupt_index_yields_an_empty_map_so_every_region_rebuilds() {
+        // A broken/unparseable index.json must never be silently trusted as
+        // "everything is fine" — it degrades to "no cached entries", which
+        // makes every region look new and forces a full rebuild.
+        let dir = std::env::temp_dir().join(format!("rr-batch-corrupt-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("index.json");
+
+        fs::write(&path, b"{ this is not valid json at all [[[").unwrap();
+        assert!(load_existing_index(&path).is_empty());
+
+        fs::write(&path, b"").unwrap();
+        assert!(load_existing_index(&path).is_empty());
+
+        // And skip_decision, layered on top, must then refuse to skip.
+        let existing = load_existing_index(&path);
+        assert!(skip_decision(&sample_region(), &existing, Path::new("."), None, true, false)
+            .is_none());
 
         let _ = fs::remove_dir_all(&dir);
     }

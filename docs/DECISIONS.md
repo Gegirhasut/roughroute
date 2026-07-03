@@ -643,26 +643,78 @@ so disk stays flat regardless of manifest size — a full continent's worth of
 *separate region-sized entries* is fine; a single multi-GB extract is not
 (see the RAM limit below).
 
-**Prior-index fetch strategy (the load-bearing choice).** `batch`'s skip
-(`cached_entry_is_fresh`) re-reads and re-hashes the `.graph` **bytes from
-disk** — it does not trust `index.json`'s recorded hash alone. So the workflow
-downloads the currently-published `index.json` *and every published `.graph`*
-into the output dir before running batch; fetching only the index would make
-every region rebuild every run. Re-hashing the downloaded assets is a feature,
-not just a cost: it verifies the published release is intact before the index
-is regenerated. The alternative — a `--trust-index` flag that skips on the
-recorded hash without the file present — was rejected: it would weaken the
-verified skip semantics and could carry forward an entry pointing at a
-missing/corrupt asset undetected. Re-downloading a few tens of MB per run is
-trivial on a runner.
+**Prior-index fetch strategy — revised, see the addendum below.** The first
+version of this workflow downloaded the currently-published `index.json`
+*and every published `.graph`* before running batch, and re-hashed them from
+disk (`cached_entry_is_fresh`) to decide what to skip. That was deliberately
+the *stronger* check to start with — it re-verifies the published release is
+intact, at the cost of re-downloading everything every run. With four tiny
+regions that cost was invisible; it does not scale to dozens of
+hundred-MB-plus regions, where it would mean re-fetching gigabytes just to
+decide nothing changed. The **D20 addendum** below replaces this with
+`--trust-index`, which fetches only `index.json`.
 
-**Upload consistency.** Only graphs whose bytes changed vs a pre-run snapshot
-are uploaded (skipped regions' assets stay untouched); `index.json` is always
-refreshed. Publishing happens **only if batch wrote a fresh `index.json`** (a
-mid-run `AbortRun` returns before the index write, so nothing is published
-from an inconsistent state), and runs are serialized by a `concurrency` group
-so two never update the release at once. A region *build* failure (a `Skip`)
-still publishes the successes and a consistent index, then fails the job.
+**Upload consistency.** `index.json` is always refreshed, and publishing
+happens **only if batch wrote a fresh one** (a mid-run `AbortRun` returns
+before the index write, so nothing is published from an inconsistent state).
+Runs are serialized by a `concurrency` group so two never update the release
+at once. A region *build* failure (a `Skip`) still publishes the successes
+and a consistent index, then fails the job. Which graphs get *uploaded* (all
+of them vs. only new/changed ones) depends on the fetch strategy — see the
+addendum.
+
+### D20 addendum: `--trust-index` — skip without downloading the graph (M8.1)
+
+**Problem.** The original strategy (above) downloads every published
+`.graph` on every run just to re-hash it and confirm nothing changed — an
+`O(total published size)` cost paid on every run regardless of how many
+regions actually changed, which stops scaling once the manifest holds more
+than a handful of small regions.
+
+**Decision.** Add `--trust-index` (default off) to `roughroute batch`: a
+region is skipped by trusting the identity **recorded in `index.json`
+alone**, with no local `.graph` file needed and no re-hash. A cached entry is
+trusted (`index_entry_is_trustworthy`) only if **all** of:
+
+- `region.pbf_url` (from `regions.toml`) still equals the entry's recorded
+  `source_pbf_url` — a changed source invalidates the entry regardless of
+  what its hash says, since the manifest is now asking to build something
+  different than what was last published;
+- the entry's `format_version` **exactly** equals the current format version
+  — not `<=`. This is the correctness-critical guard: an older version
+  (the normal "format bumped" case) must rebuild, and — deliberately
+  stricter than seems necessary — so must a *newer* recorded version (an
+  entry from a format this binary doesn't know yet is never "close enough"
+  to trust);
+- `sha256`/`bytes` look like real recorded values (64 hex chars, positive
+  size) rather than defaults from a corrupt or pre-hash schema.
+
+A missing entry, `--force`, or a failed trust check all mean "(re)build" —
+the same as the default mode. A **missing or unparseable `index.json`
+degrades to an empty cache**, so every region looks new and the whole
+manifest builds — trusting a broken index is never an option; only a
+successfully parsed one can grant a skip.
+
+**The trade-off, stated plainly.** `--trust-index` trusts that the published
+release asset actually matches its recorded hash — i.e. that nobody
+tampered with (or corrupted) the release out of band since it was published.
+It does **not** re-verify the bytes on the server. That's an acceptable
+trade for our own CI-published release (nothing else writes to it, and the
+whole pipeline that writes it — build, verify, atomic write, hash — runs in
+the same job that reads it back next time); it would not be acceptable for
+an index describing a third-party or otherwise untrusted release. The
+**default, local behavior is unchanged**: without `--trust-index`, `batch`
+still re-hashes the `.graph` from disk — the stronger check remains what a
+developer gets by default.
+
+**CI now fetches only `index.json`.** `build-regions.yml` downloads just that
+one small file (not every `.graph`) and runs `batch --trust-index`. Because a
+skipped region is never written to the output directory at all under
+`--trust-index` (`skip_decision` only ever produces an in-memory entry to
+carry into the regenerated index, never a file), every `.graph` present in
+the output directory *after* a run is, by construction, exactly a region
+this run (re)built — so "upload only new/changed graphs" is simply "upload
+everything in the output directory," with no before/after hash diff needed.
 
 **Known gap — RAM, deferred.** The runner clears the *local* memory ceiling
 but not memory in general: a truly large extract (Germany/France, multi-GB

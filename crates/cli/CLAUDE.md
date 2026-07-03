@@ -25,16 +25,30 @@ roughroute route --graph <file.graph> --profile car|foot \
 ## Batch subcommand (M6, DECISIONS D17)
 
 `roughroute batch [--manifest regions.toml] [--out-dir dist]
-[--release-url-base URL] [--force]` — dev/CI region pipeline.
+[--release-url-base URL] [--force] [--trust-index]` — dev/CI region pipeline.
 
-**Incremental** (D17 addendum): before anything else, a region already in
-`index.json` is checked against the file on disk — matching size, sha256,
-*and* `format_version` (per-region field) means it's skipped entirely: no
-HEAD probe, no download, no rebuild, just carrying the entry forward
-(`url` still recomputed from `--release-url-base`). `--force` bypasses this
-for every region. A format version bump makes every cached entry look
-stale (their recorded `format_version` no longer matches), which is exactly
-right — those files are objectively obsolete under the new format.
+**Incremental, two modes** (D17 addendum, D20 addendum): before anything
+else, a region already in `index.json` is checked; if still up to date it's
+skipped entirely — no HEAD probe, no download, no rebuild, just carrying the
+entry forward (`url` still recomputed from `--release-url-base`). `--force`
+bypasses this for every region.
+- **Default: disk re-hash** (`cached_entry_is_fresh`) — matches size, sha256,
+  *and* `format_version` against the actual `.graph` file on disk. Requires
+  the file present locally; this is what local/dev use.
+- **`--trust-index`** (`index_entry_is_trustworthy`) — trusts `index.json`'s
+  recorded fields with no local `.graph` needed: the region's source URL is
+  unchanged, `format_version` **exactly** matches current (older *and* newer
+  both force a rebuild), and the recorded hash/size look real. This is what
+  CI passes, so the runner never re-downloads every graph just to confirm
+  nothing changed. Trade-off: trusts the published asset wasn't tampered
+  with out of band — fine for our own CI-published release, not a
+  substitute for the disk check in general.
+
+A format version bump makes every cached entry look stale (their recorded
+`format_version` no longer matches, in *either* mode), which is exactly
+right — those files are objectively obsolete under the new format. A
+missing or unparseable `index.json` degrades to "no cached entries" in
+either mode — never silently trusted, always a full rebuild.
 
 For a region that does need building, strictly: **hard size ceiling**
 (HEAD-probed `.pbf` size vs `HARD_MAX_PBF_BYTES = 800_000_000`; an unknown
@@ -57,16 +71,20 @@ test, 309.6 MB pbf — the largest region built in this environment). See
 PLAN.md "M6 scaling test" / "M6.1 incremental batch" / "M7" for measured
 numbers.
 
-**CI publishing (M8/D20).** `.github/workflows/build-regions.yml` runs this
-subcommand on a GitHub-hosted runner on a push that changes `regions.toml`,
-so region graphs are built/published without a local `.pbf` download and on
-the runner's larger RAM. The workflow is a thin driver — it fetches the
-published `index.json` **and** the `.graph` assets (the skip re-hashes graph
-bytes from disk, so they must be present), runs batch, and uploads only
-changed graphs + a fresh index. Don't move batch logic into YAML. `batch`
-logs free disk before/after each region so the runner's download→delete
-cycle is visible. Peak build RAM is unbounded (no streaming) — a multi-GB
-extract can OOM even the runner.
+**CI publishing (M8/D20, `--trust-index` M8.1).** `.github/workflows/build-
+regions.yml` runs this subcommand on a GitHub-hosted runner on a push that
+changes `regions.toml`, so region graphs are built/published without a
+local `.pbf` download and on the runner's larger RAM. The workflow is a thin
+driver — it fetches only the published `index.json` (not the `.graph`
+assets — CI passes `--trust-index` so the disk re-hash isn't needed), runs
+batch, and uploads whatever landed in the output dir + a fresh index. That
+upload step is deliberately simple: under `--trust-index` a skipped region
+is never written to the output dir at all, so every `.graph` file present
+after the run is by construction one this run actually built — no
+before/after hash diff needed to tell "new" from "carried forward." Don't
+move batch logic into YAML. `batch` logs free disk before/after each region
+so the runner's download→delete cycle is visible. Peak build RAM is
+unbounded (no streaming) — a multi-GB extract can OOM even the runner.
 
 ## Constraints
 - Route output goes to stdout (pipeable, per spec examples); diagnostics and

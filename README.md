@@ -168,11 +168,21 @@ The intended flow keeps your machine out of the loop entirely:
 1. Edit `regions.toml` (add or change a region), commit, and push to `main`.
 2. The **`Build & publish region graphs`** GitHub Action
    (`.github/workflows/build-regions.yml`) runs on a GitHub-hosted runner:
-   it downloads the currently-published graphs + `index.json`, runs
-   `roughroute batch` (so **only the new/changed region actually builds** —
-   everything else is skipped by the sha256 + size + format-version check),
-   and uploads the newly-built `.graph` files plus a refreshed `index.json`
-   to the `graphs-v3` release. Untouched regions' assets are left as-is.
+   it downloads only the tiny `index.json` (not every published `.graph` —
+   see `--trust-index` below), runs `roughroute batch` (so **only the
+   new/changed region actually builds** — everything else is skipped by
+   trusting the recorded sha256 + size + format-version), and uploads the
+   newly-built `.graph` files plus a refreshed `index.json` to the
+   `graphs-v3` release. Untouched regions' assets are left as-is.
+
+CI passes `--trust-index` to `batch`: a region is skipped by trusting what
+`index.json` already says about it (matching source URL and current format
+version), without needing the `.graph` file locally at all — so the runner
+never re-downloads graphs just to confirm they're unchanged, which is what
+keeps this cheap as the manifest grows past a handful of tiny regions.
+That's a CI-only trade (trusting the release wasn't tampered with out of
+band); local `roughroute batch` still re-hashes the actual file by default.
+See `docs/DECISIONS.md` D20 addendum.
 
 Your machine never downloads a `.pbf` or stores a `.graph`. You can also run
 it manually from the Actions tab (**Run workflow**), optionally setting

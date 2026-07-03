@@ -224,9 +224,16 @@ in-repo). Hosting can later move to Cloudflare R2 by regenerating URLs only.
 - [x] M8 CI publishing on GitHub-hosted runners (D20) —
       `.github/workflows/build-regions.yml` builds/publishes region graphs on
       the runner (thin driver over incremental `batch`); no local `.pbf`
-      download, and the runner RAM clears the Austria OOM. First run is
-      dispatched manually by the maintainer. Known gap: no streaming build /
-      RAM gate (a multi-GB extract can still OOM the runner).
+      download, and the runner RAM clears the Austria OOM. First dispatch
+      failed at `cargo build` on a stale 1.85.0 pin below the dependency
+      tree's 1.88 floor; fixed by moving the pin to `rust-toolchain.toml`
+      (1.96.1), shared with local dev. Second dispatch **ran end to end and
+      published the first `graphs-v3` release**. Known gap: no streaming
+      build / RAM gate (a multi-GB extract can still OOM the runner).
+- [x] M8.1 `--trust-index` (D20 addendum) — CI skips a region from
+      `index.json`'s recorded hash alone, no local `.graph` needed; workflow
+      now fetches only the index, not every published graph. Local `batch`
+      keeps the stronger disk re-hash by default.
 
 ### M6 scaling test (2026-07-03): Slovenia, a mid-size region
 
@@ -312,24 +319,45 @@ runner's ~16 GB RAM builds the Austria-class regions that OOM the local VM
 `regions.toml` (or manual dispatch, with an optional `force=all`), and is a
 thin driver over the existing incremental `roughroute batch`:
 
-- Fetches the currently-published `index.json` **and** `.graph` assets first —
-  the skip re-hashes graph bytes from disk, so the files must be present for a
-  region to count as up to date (D20 explains why fetching the index alone
-  would rebuild everything, and why re-hashing is a feature).
+- Fetches the currently-published `index.json`.
 - Runs `batch` with `--release-url-base` pointing at the `graphs-v3` release,
   so only new/changed regions build.
-- Uploads only the graphs whose bytes changed plus a refreshed `index.json`
-  (skipped regions' assets untouched); publishes **only** when batch wrote a
-  fresh index (an `AbortRun` publishes nothing), serialized by a `concurrency`
+- Uploads the newly-built graphs plus a refreshed `index.json` (skipped
+  regions' assets untouched); publishes **only** when batch wrote a fresh
+  index (an `AbortRun` publishes nothing), serialized by a `concurrency`
   group; a region failure still publishes the successes, then fails the job.
 
 Uses only the built-in `GITHUB_TOKEN`. `batch` also gained a per-region
 `disk before/after` log so the download→delete cycle is visible in the run.
+The first dispatch failed at `cargo build` on a stale pinned toolchain
+(1.85.0, below the dependency tree's 1.88 floor) — fixed by moving the pin to
+`rust-toolchain.toml` (shared with local dev) at 1.96.1; see the Status
+checklist.
 
 **Not done (known gap, D18/D20):** streaming build — `batch` still holds the
 whole graph in memory, so a multi-GB extract can OOM even the runner; no RAM
-gate. First real run is triggered manually by the maintainer, not by this
-milestone.
+gate.
+
+## M8.1 — `--trust-index`: skip without downloading the graph (DONE, D20 addendum)
+
+M8's first version fetched every published `.graph` (not just `index.json`)
+before running batch, because the skip re-hashed graph bytes from disk —
+correct, but `O(total published size)` per run regardless of what changed,
+which doesn't scale past a handful of tiny regions.
+
+Added `--trust-index` to `roughroute batch` (default off — local dev keeps
+the stronger disk re-hash): a region is skipped by trusting `index.json`'s
+recorded `source_pbf_url` + `format_version` (exact match, older *and* newer
+both force a rebuild) + hash/size shape, with **no local `.graph` file
+needed**. A missing/corrupt index still means "rebuild everything," same as
+before. The workflow now fetches only `index.json`; since a skipped region is
+never written to the output dir under this mode, every `.graph` present
+after a run is by construction one this run built, so the publish step
+simplified from a before/after hash diff to "upload everything in the output
+dir." Verified functionally: an unchanged region skips with the `.graph`
+file deleted beforehand (proving no disk access), a source-URL change or a
+stale recorded `format_version` correctly forces a rebuild, and a corrupted
+`index.json` degrades to a full rebuild.
 
 ### M0 measured reality (2026-07-03, cyprus-latest ≈ 36 MB pbf, debug build)
 
