@@ -68,8 +68,17 @@ zero-copy loader can cast sections in place:
   `(target, length_dm, access)`.
 - No timestamps, no map/hash iteration order anywhere in the output path
   (collect → sort, or use `BTreeMap`).
-- Result: same `.pbf` + same builder version → byte-identical `.graph`
-  (golden test).
+- Result: same `.pbf` + same builder version **on the same platform/toolchain**
+  → byte-identical `.graph` (golden test). The qualifier matters: edge
+  `length_dm` is `round(haversine_m × 10)`, and haversine flows through libm
+  `sin`/`cos`/`asin`, which are not correctly-rounded and can differ in the
+  last ULP across OS/libc/architecture. A coordinate pair landing within an
+  ULP of a `.5` rounding boundary can therefore round differently on another
+  platform, yielding different `.graph` bytes (and a different `index.json`
+  sha256). Reproducibility is **same-platform**; a fixed software trig
+  implementation would be the fix if cross-platform byte-identity ever
+  mattered (it currently does not — graphs are rebuilt, not diffed across
+  machines). See the "Known limitations" note at the end of this file.
 
 **Route side (identical output).**
 - A\* priority = `(f, node_index)`: ties in `f` break by **smaller node index**.
@@ -611,3 +620,37 @@ outputs (`line` array and `meters`, to full float precision) are **byte-for-
 byte identical** between v2 and v3 — not just "close," identical — exactly
 as predicted by the "decode on load, nothing downstream changes" argument
 above.
+
+## Known limitations (deliberate v1 scope)
+
+These are known and out of scope for v1 — documented so they're a choice, not
+a surprise. Each notes the real fix if it ever becomes necessary.
+
+- **Antimeridian-spanning regions** (Fiji, Chukotka, NZ + Chathams): the
+  snapping projection is a local equirectangular frame that computes
+  `plon − lon` without wrapping, so it is wrong across the ±180° seam. Rather
+  than misroute silently, `build_graph` **rejects** any region whose longitude
+  span exceeds 180° with `BuildError::AntimeridianSpanning`. Full support
+  (wrapping the projection and the grid at the seam) is deferred.
+
+- **Cross-platform byte-identical builds**: reproducibility is
+  **same-platform/toolchain only** (D3). `length_dm` depends on libm trig,
+  which isn't correctly-rounded, so a `.graph`'s bytes (and its `index.json`
+  sha256) can differ across OS/arch for the same input. Fine as long as graphs
+  are rebuilt per platform rather than diffed across machines; a fixed software
+  trig path for `length_dm` is the fix if that ever changes.
+
+- **Hostile-graph huge allocation via pathological segment coverage**: a
+  crafted-but-valid `.graph` where a single edge's bounding rectangle covers
+  the whole grid could make `Grid::build` allocate an enormous segment index.
+  In practice this is gated by the host app sha256-verifying downloads
+  (D17 / README), so a hostile graph never reaches a real device. A
+  per-segment cell-coverage cap in `Grid::build` is the real fix and is
+  deferred (it touches the correctness-critical snapping index, so it wants
+  its own careful change rather than being bolted on here).
+
+- **4 GiB+ geometry pool**: the on-disk `geo_bytes` length is a `u32`.
+  `Graph::from_parts` now rejects any pool that would delta-encode past that
+  with a clean `GraphError::Malformed` (D19), so the former silent truncation
+  is gone. Unreachable at target scale (it needs a multi-GB in-memory graph);
+  no further work planned.

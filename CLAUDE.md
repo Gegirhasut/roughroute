@@ -6,7 +6,7 @@ maneuvers is explicitly NOT guaranteed; `oneway`/turn restrictions/`access`
 are ignored by design). Compiles to CLI, WASM, and a UniFFI Kotlin binding.
 
 ## Read these first
-- `../docs/roughroute-SPEC-EN.md` — the spec, source of truth. §6 (contract/API)
+- `docs/roughroute-SPEC-EN.md` — the spec, source of truth. §6 (contract/API)
   and §7 (binary format) are **fixed boundaries** — never change them casually.
 - `docs/PLAN.md` — milestone plan and current status.
 - `docs/DECISIONS.md` — resolved design decisions (D1–D11). Check here before

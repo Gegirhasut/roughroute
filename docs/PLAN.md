@@ -1,6 +1,6 @@
 # roughroute — Implementation Plan
 
-Source of truth: `../../docs/roughroute-SPEC-EN.md` (spec v1). Design choices that the
+Source of truth: `./roughroute-SPEC-EN.md` (spec v1). Design choices that the
 spec leaves open are recorded in [`DECISIONS.md`](DECISIONS.md); this file is the
 *order of work*.
 

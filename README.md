@@ -196,9 +196,28 @@ val router = Router(graphBytes)                    // graphBytes from assets or 
 val res = router.route(waypoints, Profile.CAR)     // res.line, res.meters, res.fallback
 ```
 
+## Known limitations
+
+Deliberately out of scope for v1 (see `docs/DECISIONS.md` "Known limitations"
+for the full notes and the real fix for each):
+
+- **Antimeridian-spanning regions** (Fiji, Chukotka, NZ + Chathams) are
+  **not supported**: the snapping projection is wrong across the ±180° seam,
+  so `roughroute build` refuses any region spanning more than 180° of
+  longitude with a clear error rather than building one that misroutes.
+- **Reproducible builds are same-platform only.** The same `.pbf` yields
+  byte-identical `.graph` bytes on the same OS/toolchain, but edge lengths go
+  through platform trig that isn't correctly-rounded, so bytes (and the
+  `index.json` sha256) can differ across machines. Rebuild per platform;
+  don't diff graphs across machines.
+- **Snap the app, not the router, to the network.** The runtime never
+  downloads; hostile `.graph` inputs are mitigated by the host app verifying
+  the published sha256 before use.
+
 ## Project docs
 
 - `docs/PLAN.md` — implementation plan and milestone status.
 - `docs/DECISIONS.md` — design decisions (binary format details, determinism,
-  snapping grid, profile tag table).
-- `../docs/roughroute-SPEC-EN.md` — the full specification.
+  snapping grid, profile tag table) and known limitations.
+- `docs/roughroute-SPEC-EN.md` — the full specification (§7's byte layout is
+  superseded by the v2/v3 format in DECISIONS D12/D19).
