@@ -161,7 +161,8 @@ fn cmd_build(
         way.access &= keep_mask;
     }
     let (graph, stats) = build_graph(&ways, &coords)?;
-    fs::write(&out, graph.to_bytes())?;
+    let bytes = graph.to_bytes();
+    fs::write(&out, &bytes)?;
 
     if let Some(path) = temp_download {
         let _ = fs::remove_file(path); // best-effort cleanup
@@ -169,10 +170,11 @@ fn cmd_build(
 
     let bb = graph.bbox();
     eprintln!(
-        "wrote {}: {} nodes, {} directed edges, bbox [{:.4}, {:.4}] – [{:.4}, {:.4}]",
+        "wrote {}: {} nodes, {} directed edges, {} geometry points, bbox [{:.4}, {:.4}] – [{:.4}, {:.4}]",
         out.display(),
         graph.node_count(),
         graph.edge_count(),
+        graph.geometry_point_count(),
         bb.min_lat,
         bb.min_lon,
         bb.max_lat,
@@ -181,6 +183,29 @@ fn cmd_build(
     eprintln!(
         "  ways used: {}, segments dropped (missing nodes): {}, duplicate edges merged: {}",
         stats.ways_used, stats.segments_dropped_missing_node, stats.duplicate_edges_merged,
+    );
+    // What the M4 degree-2 collapse bought (spec §7.4 / §12): the "before"
+    // size is what the same network costs in the v1 layout (32-byte header,
+    // 12-byte edges, every way node a graph node).
+    let v1_equivalent = 32
+        + stats.nodes_before_collapse * 8
+        + (stats.nodes_before_collapse + 1) * 4
+        + stats.edges_before_collapse * 12;
+    let mb = |b: u64| b as f64 / (1024.0 * 1024.0);
+    eprintln!(
+        "  collapse: {} → {} nodes, {} → {} directed edges ({} interior collapsed, {} loop chains dropped)",
+        stats.nodes_before_collapse,
+        graph.node_count(),
+        stats.edges_before_collapse,
+        graph.edge_count(),
+        stats.interior_nodes_collapsed,
+        stats.loop_chains_dropped,
+    );
+    eprintln!(
+        "  size: {:.1} MB (was {:.1} MB uncollapsed v1-format) — {:.1}x smaller",
+        mb(bytes.len() as u64),
+        mb(v1_equivalent),
+        v1_equivalent as f64 / bytes.len() as f64,
     );
     Ok(())
 }
