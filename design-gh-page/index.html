@@ -180,12 +180,24 @@
   pre .a{color:var(--amber)}  /* value */
   pre .k{color:#8fb4c9}       /* keyword */
 
-  /* ---------- regions strip ---------- */
-  .regions{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:var(--line);border:1px solid var(--line)}
-  .region{background:var(--ink-2);padding:22px 20px}
-  .region .name{font-weight:600;font-size:15px}
+  /* ---------- regions strip (each tile is a real download link) ---------- */
+  .regions{display:grid;grid-template-columns:repeat(3,1fr);gap:1px;background:var(--line);border:1px solid var(--line)}
+  .region{
+    background:var(--ink-2);padding:22px 20px;position:relative;display:block;color:inherit;
+    transition:background .18s,box-shadow .18s;
+  }
+  .region:hover{background:#15222a;box-shadow:inset 0 0 0 1px var(--route)}
+  .region:focus-visible{outline:none;box-shadow:inset 0 0 0 2px var(--route)}
+  .region .name{font-weight:600;font-size:15px;transition:color .18s}
+  .region:hover .name,.region:focus-visible .name{color:var(--route)}
   .region .size{font-family:'Space Mono',monospace;font-size:12px;color:var(--route);margin-top:6px}
   .region .sub{font-family:'Space Mono',monospace;font-size:11px;color:var(--muted);margin-top:2px}
+  /* download affordance: a small ↓ that greens and nudges down on hover */
+  .region .dl{
+    position:absolute;top:20px;right:18px;font-family:'Space Mono',monospace;
+    font-size:14px;color:var(--muted);transition:color .18s,transform .18s;
+  }
+  .region:hover .dl,.region:focus-visible .dl{color:var(--route);transform:translateY(2px)}
 
   /* ---------- footer ---------- */
   footer{position:relative;z-index:1;border-top:1px solid var(--line);padding:54px 0 70px;background:var(--ink)}
@@ -414,11 +426,36 @@ roughroute <span class="g">route</span> --graph cyprus.graph --profile car \
       <h2 data-en="Grab a region, or build your own." data-ru="Возьми регион или собери свой." data-zh="取用现成区域，或自行构建。" data-es="Toma una región, o construye la tuya." data-de="Nimm eine Region, oder baue deine eigene." data-fr="Prenez une région, ou construisez la vôtre." data-pt="Pegue uma região, ou construa a sua." data-ja="リージョンを選ぶか、自分で構築する。" data-ar="خذ منطقة جاهزة، أو ابنِ منطقتك الخاصة.">Grab a region, or build your own.</h2>
       <p data-en="Region graphs are built by CI from a manifest and published as release assets, each with a recorded checksum. Add a line, push, and the pipeline bakes just that region." data-ru="Графы регионов собираются CI по манифесту и публикуются как файлы релиза, каждый с зафиксированной контрольной суммой. Добавьте строку, запушьте — и конвейер соберёт только этот регион." data-zh="区域图由 CI 根据清单构建，并作为发布资源发布，每个都带有记录的校验和。添加一行、推送，流水线就只构建那一个区域。" data-es="Los grafos regionales los construye la CI a partir de un manifiesto y se publican como assets de release, cada uno con su checksum registrado. Añade una línea, haz push, y el pipeline compila solo esa región." data-de="Regionsgraphen werden von der CI aus einem Manifest gebaut und als Release-Assets veröffentlicht, jeder mit erfasster Prüfsumme. Eine Zeile hinzufügen, pushen — und die Pipeline baut genau diese Region." data-fr="Les graphes régionaux sont construits par la CI à partir d'un manifeste et publiés comme assets de release, chacun avec une somme de contrôle enregistrée. Ajoutez une ligne, poussez, et le pipeline ne construit que cette région." data-pt="Os grafos regionais são construídos pela CI a partir de um manifesto e publicados como assets de release, cada um com um checksum registrado. Adicione uma linha, faça push, e o pipeline constrói só aquela região." data-ja="リージョングラフはマニフェストをもとに CI がビルドし、それぞれチェックサムを記録した上でリリースアセットとして公開されます。一行追加してプッシュすれば、パイプラインはそのリージョンだけをビルドします。" data-ar="تُبنى الرسوم البيانية الإقليمية بواسطة CI انطلاقًا من بيان (manifest) وتُنشر كأصول إصدار (release assets)، كل واحد منها مع مجموع اختباري (checksum) مسجَّل. أضف سطرًا واحدًا وادفعه، فيبني خط الإنتاج تلك المنطقة فقط.">Region graphs are built by CI from a manifest and published as release assets, each with a recorded checksum. Add a line, push, and the pipeline bakes just that region.</p>
     </div>
-    <div class="regions">
-      <div class="region"><div class="name">Andorra</div><div class="size">1.1 MB</div><div class="sub">v3 graph</div></div>
-      <div class="region"><div class="name">Malta</div><div class="size">3.4 MB</div><div class="sub">v3 graph</div></div>
-      <div class="region"><div class="name">Cyprus</div><div class="size">20.8 MB</div><div class="sub">v3 graph</div></div>
-      <div class="region"><div class="name">Slovenia</div><div class="size">56.4 MB</div><div class="sub">v3 graph</div></div>
+    <!-- Direct links to the graphs-v3 release assets. Static (Option A):
+         GitHub release-asset URLs send no CORS headers, so a cross-origin
+         fetch of index.json from this github.io page is blocked by the
+         browser — a dynamic build from index.json isn't possible. Sizes are
+         decimal MB from index.json; update these when regions/sizes change. -->
+    <div class="regions" dir="ltr">
+      <a class="region" href="https://github.com/Gegirhasut/roughroute/releases/download/graphs-v3/andorra.graph" download aria-label="Download the Andorra region graph (1.1 MB, v3)">
+        <span class="dl" aria-hidden="true">↓</span>
+        <div class="name">Andorra</div><div class="size">1.1 MB</div><div class="sub">v3 graph</div>
+      </a>
+      <a class="region" href="https://github.com/Gegirhasut/roughroute/releases/download/graphs-v3/malta.graph" download aria-label="Download the Malta region graph (3.4 MB, v3)">
+        <span class="dl" aria-hidden="true">↓</span>
+        <div class="name">Malta</div><div class="size">3.4 MB</div><div class="sub">v3 graph</div>
+      </a>
+      <a class="region" href="https://github.com/Gegirhasut/roughroute/releases/download/graphs-v3/cyprus.graph" download aria-label="Download the Cyprus region graph (20.8 MB, v3)">
+        <span class="dl" aria-hidden="true">↓</span>
+        <div class="name">Cyprus</div><div class="size">20.8 MB</div><div class="sub">v3 graph</div>
+      </a>
+      <a class="region" href="https://github.com/Gegirhasut/roughroute/releases/download/graphs-v3/slovenia.graph" download aria-label="Download the Slovenia region graph (56.4 MB, v3)">
+        <span class="dl" aria-hidden="true">↓</span>
+        <div class="name">Slovenia</div><div class="size">56.4 MB</div><div class="sub">v3 graph</div>
+      </a>
+      <a class="region" href="https://github.com/Gegirhasut/roughroute/releases/download/graphs-v3/kenya.graph" download aria-label="Download the Kenya region graph (110.1 MB, v3)">
+        <span class="dl" aria-hidden="true">↓</span>
+        <div class="name">Kenya</div><div class="size">110.1 MB</div><div class="sub">v3 graph</div>
+      </a>
+      <a class="region" href="https://github.com/Gegirhasut/roughroute/releases/download/graphs-v3/switzerland.graph" download aria-label="Download the Switzerland region graph (185.9 MB, v3)">
+        <span class="dl" aria-hidden="true">↓</span>
+        <div class="name">Switzerland</div><div class="size">185.9 MB</div><div class="sub">v3 graph</div>
+      </a>
     </div>
   </div>
 </section>
