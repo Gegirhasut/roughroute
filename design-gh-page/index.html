@@ -1,0 +1,549 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>roughroute — offline OSM mini-router</title>
+<meta name="description" content="A fast, tiny, fully offline OSM router. Give it waypoints, get a road-following polyline. Compiles to WASM, native, and CLI.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --ink:#0b1014;         /* deep topographic ground */
+    --ink-2:#111a20;       /* raised panel */
+    --paper:#e8eef0;       /* near-white body text */
+    --muted:#7d929b;       /* contour grey */
+    --line:#1e2c34;        /* hairline road */
+    --line-2:#2a3d47;      /* stronger road */
+    --route:#7bd88f;       /* the highlighted route — cartographic path green */
+    --route-dim:#3f7a52;
+    --node:#4a6572;        /* graph node */
+    --amber:#e8c07d;       /* waypoint marker */
+    --radius:0px;
+    --maxw:1080px;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html{scroll-behavior:smooth}
+  body{
+    background:var(--ink);
+    color:var(--paper);
+    font-family:'Space Grotesk',system-ui,sans-serif;
+    line-height:1.6;
+    -webkit-font-smoothing:antialiased;
+    overflow-x:hidden;
+  }
+  a{color:inherit;text-decoration:none}
+  code,.mono{font-family:'Space Mono',ui-monospace,monospace}
+
+  /* ---------- background graph layer ---------- */
+  .graph-bg{
+    position:fixed;inset:0;z-index:0;pointer-events:none;
+    opacity:0.62;
+  }
+  .graph-bg::after{ /* vignette so content stays legible */
+    content:"";position:absolute;inset:0;
+    background:radial-gradient(ellipse at 50% 30%, transparent 0%, var(--ink) 78%);
+  }
+
+  .wrap{position:relative;z-index:1;max-width:var(--maxw);margin:0 auto;padding:0 24px}
+
+  /* ---------- eyebrow / labels ---------- */
+  .eyebrow{
+    font-family:'Space Mono',monospace;
+    font-size:12px;letter-spacing:0.22em;text-transform:uppercase;
+    color:var(--route);
+    display:inline-flex;align-items:center;gap:10px;
+  }
+  .eyebrow::before{content:"";width:22px;height:1px;background:var(--route)}
+
+  /* ---------- hero ---------- */
+  header.hero{
+    position:relative;z-index:1;
+    min-height:92vh;display:flex;flex-direction:column;justify-content:center;
+    max-width:var(--maxw);margin:0 auto;padding:120px 24px 80px;
+  }
+  .topbar{
+    position:absolute;top:0;left:24px;right:24px;
+    display:flex;justify-content:space-between;align-items:center;
+    padding:26px 0;font-family:'Space Mono',monospace;font-size:13px;
+    color:var(--muted);letter-spacing:0.04em;
+  }
+  .topbar .brand{color:var(--paper);font-weight:700;letter-spacing:0.02em}
+  .topbar .brand b{color:var(--route)}
+  .topbar nav{display:flex;gap:22px}
+  .topbar nav a:hover{color:var(--route)}
+  .lang-select{
+    background:var(--ink-2);color:var(--paper);
+    border:1px solid var(--line-2);
+    font-family:'Space Mono',monospace;font-size:12px;letter-spacing:0.03em;
+    padding:6px 28px 6px 10px;cursor:pointer;
+    -webkit-appearance:none;appearance:none;
+    background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 10 10'><path d='M1 3l4 4 4-4' fill='none' stroke='%237bd88f' stroke-width='1.4'/></svg>");
+    background-repeat:no-repeat;background-position:right 9px center;
+    transition:border-color .18s;
+  }
+  .lang-select:hover{border-color:var(--route)}
+  .lang-select:focus{outline:none;border-color:var(--route)}
+  .lang-select option{background:var(--ink-2);color:var(--paper)}
+
+  h1{
+    font-size:clamp(42px,7.2vw,86px);
+    font-weight:700;line-height:0.98;letter-spacing:-0.03em;
+    margin:18px 0 0;
+  }
+  h1 .path{color:var(--route)}
+  .lede{
+    margin-top:26px;max-width:620px;
+    font-size:clamp(17px,2.1vw,21px);color:#c4d0d5;font-weight:400;
+  }
+  .coords{
+    margin-top:30px;font-family:'Space Mono',monospace;font-size:13px;
+    color:var(--muted);display:flex;flex-wrap:wrap;gap:8px 22px;align-items:center;
+  }
+  .coords b{color:var(--amber);font-weight:400}
+  .coords .arrow{color:var(--route)}
+
+  .cta-row{margin-top:40px;display:flex;flex-wrap:wrap;gap:14px}
+  .btn{
+    font-family:'Space Mono',monospace;font-size:14px;font-weight:700;
+    padding:14px 22px;border:1px solid var(--line-2);
+    display:inline-flex;align-items:center;gap:10px;
+    transition:border-color .2s,color .2s,background .2s;letter-spacing:0.02em;
+  }
+  .btn.primary{background:var(--route);color:#08120b;border-color:var(--route)}
+  .btn.primary:hover{background:#96e6a8;border-color:#96e6a8}
+  .btn.ghost:hover{border-color:var(--route);color:var(--route)}
+
+  /* ---------- section frame ---------- */
+  section{
+    position:relative;z-index:1;padding:88px 0;border-top:1px solid var(--line);
+    background:linear-gradient(180deg, rgba(11,16,20,0.82) 0%, rgba(11,16,20,0.92) 12%, rgba(11,16,20,0.92) 88%, rgba(11,16,20,0.82) 100%);
+    backdrop-filter:blur(2px);-webkit-backdrop-filter:blur(2px);
+  }
+  .sec-head{display:flex;flex-direction:column;gap:14px;margin-bottom:44px}
+  .sec-head h2{font-size:clamp(28px,4vw,40px);font-weight:600;letter-spacing:-0.02em;line-height:1.05}
+  .sec-head p{color:var(--muted);max-width:640px;font-size:16px}
+
+  /* ---------- what: feature grid ---------- */
+  .grid{display:grid;grid-template-columns:repeat(3,1fr);gap:1px;background:var(--line);border:1px solid var(--line)}
+  .cell{background:var(--ink-2);padding:28px 24px;min-height:172px;display:flex;flex-direction:column;gap:10px}
+  .cell .k{font-family:'Space Mono',monospace;font-size:12px;color:var(--route);letter-spacing:0.12em}
+  .cell h3{font-size:18px;font-weight:600}
+  .cell p{font-size:14.5px;color:var(--muted)}
+
+  /* ---------- why ---------- */
+  .why{display:grid;grid-template-columns:1fr 1fr;gap:40px;align-items:start}
+  .why .col p{color:#bcc9ce;margin-bottom:16px;font-size:15.5px}
+  .why .col p:last-child{margin-bottom:0}
+  .why .col .tag{font-family:'Space Mono',monospace;font-size:12px;letter-spacing:0.12em;text-transform:uppercase;color:var(--muted);margin-bottom:16px;display:block}
+  .honest{border-left:2px solid var(--route-dim);padding-left:20px}
+  .honest b{color:var(--paper)}
+
+  /* ---------- pipeline (numbered — real sequence) ---------- */
+  .pipe{display:grid;grid-template-columns:repeat(3,1fr);gap:22px}
+  .step{background:var(--ink-2);border:1px solid var(--line);padding:26px 22px;position:relative}
+  .step .n{font-family:'Space Mono',monospace;font-size:12px;color:var(--route);letter-spacing:0.14em}
+  .step h3{margin:12px 0 8px;font-size:17px;font-weight:600}
+  .step p{font-size:14px;color:var(--muted)}
+  .step .env{margin-top:14px;font-family:'Space Mono',monospace;font-size:11px;color:var(--line-2);text-transform:uppercase;letter-spacing:0.1em;color:#5a6f78}
+
+  /* ---------- code example ---------- */
+  .code-wrap{border:1px solid var(--line);background:#0a1116}
+  .code-tabs{display:flex;border-bottom:1px solid var(--line);font-family:'Space Mono',monospace;font-size:12.5px}
+  .code-tabs span{padding:13px 18px;color:var(--muted);letter-spacing:0.06em;border-right:1px solid var(--line)}
+  .code-tabs span.on{color:var(--route);background:rgba(123,216,143,0.06)}
+  pre{padding:24px;overflow-x:auto;font-family:'Space Mono',monospace;font-size:13.5px;line-height:1.7;color:#c8d4d9}
+  pre .c{color:#5a6f78}       /* comment */
+  pre .g{color:var(--route)}  /* accent token */
+  pre .a{color:var(--amber)}  /* value */
+  pre .k{color:#8fb4c9}       /* keyword */
+
+  /* ---------- regions strip ---------- */
+  .regions{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:var(--line);border:1px solid var(--line)}
+  .region{background:var(--ink-2);padding:22px 20px}
+  .region .name{font-weight:600;font-size:15px}
+  .region .size{font-family:'Space Mono',monospace;font-size:12px;color:var(--route);margin-top:6px}
+  .region .sub{font-family:'Space Mono',monospace;font-size:11px;color:var(--muted);margin-top:2px}
+
+  /* ---------- footer ---------- */
+  footer{position:relative;z-index:1;border-top:1px solid var(--line);padding:54px 0 70px}
+  .foot-grid{display:flex;justify-content:space-between;flex-wrap:wrap;gap:28px}
+  .foot-grid a{color:var(--muted);font-family:'Space Mono',monospace;font-size:13px}
+  .foot-grid a:hover{color:var(--route)}
+  .attrib{margin-top:34px;font-family:'Space Mono',monospace;font-size:12px;color:#556a73;line-height:1.7}
+  .attrib b{color:var(--muted);font-weight:400}
+  .byline{margin-top:14px;font-family:'Space Mono',monospace;font-size:12px;color:#455761}
+  .byline a{color:var(--muted);border-bottom:1px solid var(--line-2);padding-bottom:1px}
+  .byline a:hover{color:var(--route);border-color:var(--route)}
+
+  /* ---------- responsive ---------- */
+  @media(max-width:860px){
+    .grid{grid-template-columns:1fr 1fr}
+    .pipe{grid-template-columns:1fr}
+    .why{grid-template-columns:1fr;gap:28px}
+    .regions{grid-template-columns:1fr 1fr}
+    .topbar nav{display:none}
+  }
+  @media(max-width:520px){
+    .grid{grid-template-columns:1fr}
+    .regions{grid-template-columns:1fr 1fr}
+    header.hero{padding-top:100px}
+  }
+  @media(prefers-reduced-motion:reduce){
+    .edge-anim,.route-draw{animation:none !important}
+    .route-draw{stroke-dashoffset:0 !important}
+  }
+</style>
+</head>
+<body>
+
+<!-- signature: live road-graph background -->
+<svg class="graph-bg" id="graphbg" dir="ltr" preserveAspectRatio="xMidYMid slice" aria-hidden="true"></svg>
+
+<header class="hero">
+  <div class="topbar">
+    <div class="brand">rough<b>route</b></div>
+    <nav>
+      <a href="#what" data-en="what" data-ru="что" data-zh="简介" data-es="qué" data-de="was" data-fr="quoi" data-pt="o quê" data-ja="概要" data-ar="ما هو">what</a>
+      <a href="#why" data-en="why" data-ru="зачем" data-zh="为何" data-es="por qué" data-de="warum" data-fr="pourquoi" data-pt="porquê" data-ja="理由" data-ar="لماذا">why</a>
+      <a href="#how" data-en="how" data-ru="как" data-zh="原理" data-es="cómo" data-de="wie" data-fr="comment" data-pt="como" data-ja="仕組み" data-ar="كيف">how</a>
+      <a href="#use" data-en="use" data-ru="как использовать" data-zh="用法" data-es="uso" data-de="nutzung" data-fr="usage" data-pt="uso" data-ja="使い方" data-ar="الاستخدام">use</a>
+      <a href="https://github.com/Gegirhasut/roughroute">github ↗</a>
+      <select class="lang-select" id="langSelect" aria-label="Language">
+        <option value="en">EN · English</option>
+        <option value="ru">RU · Русский</option>
+        <option value="zh">ZH · 中文</option>
+        <option value="es">ES · Español</option>
+        <option value="de">DE · Deutsch</option>
+        <option value="fr">FR · Français</option>
+        <option value="pt">PT · Português</option>
+        <option value="ja">JA · 日本語</option>
+        <option value="ar">AR · العربية</option>
+      </select>
+    </nav>
+  </div>
+
+  <span class="eyebrow" data-en="Offline OSM router · Rust" data-ru="Офлайн OSM-роутер · Rust" data-zh="离线 OSM 路由器 · Rust" data-es="Router OSM offline · Rust" data-de="Offline-OSM-Router · Rust" data-fr="Routeur OSM hors ligne · Rust" data-pt="Roteador OSM offline · Rust" data-ja="オフライン OSM ルーター・Rust" data-ar="موجّه OSM يعمل دون اتصال · Rust">Offline OSM router · Rust</span>
+  <h1 data-en="Points in.&lt;br&gt;&lt;span class='path'&gt;A road-following line out.&lt;/span&gt;" data-ru="Точки на входе.&lt;br&gt;&lt;span class='path'&gt;Линия по дорогам на выходе.&lt;/span&gt;" data-zh="输入坐标点。&lt;br&gt;&lt;span class='path'&gt;输出沿道路的路线。&lt;/span&gt;" data-es="Puntos de entrada.&lt;br&gt;&lt;span class='path'&gt;Una línea que sigue las carreteras, de salida.&lt;/span&gt;" data-de="Punkte rein.&lt;br&gt;&lt;span class='path'&gt;Eine straßenfolgende Linie raus.&lt;/span&gt;" data-fr="Des points en entrée.&lt;br&gt;&lt;span class='path'&gt;Une ligne qui suit les routes, en sortie.&lt;/span&gt;" data-pt="Pontos na entrada.&lt;br&gt;&lt;span class='path'&gt;Uma linha que segue estradas, na saída.&lt;/span&gt;" data-ja="座標点を入力。&lt;br&gt;&lt;span class='path'&gt;道路に沿ったラインを出力。&lt;/span&gt;" data-ar="نقاط في الدخل.&lt;br&gt;&lt;span class='path'&gt;خط يتبع الطرق في الخرج.&lt;/span&gt;">Points in.<br><span class="path">A road-following line out.</span></h1>
+  <p class="lede" data-en="A small, fast router that turns ordered waypoints into a polyline that follows real OpenStreetMap roads — fully offline at runtime. Built to be embedded: WASM in a webview, a native library on Android, or a CLI." data-ru="Маленький быстрый роутер, который превращает упорядоченные точки в линию по реальным дорогам OpenStreetMap — полностью офлайн в рантайме. Создан для встраивания: WASM в webview, нативная библиотека на Android или CLI." data-zh="一个小巧快速的路由器，将有序坐标点转换为沿真实 OpenStreetMap 道路的折线——运行时完全离线。专为嵌入而生：webview 中的 WASM、Android 原生库或命令行工具。" data-es="Un router pequeño y rápido que convierte waypoints ordenados en una polilínea que sigue carreteras reales de OpenStreetMap — totalmente offline en tiempo de ejecución. Pensado para integrarse: WASM en un webview, una librería nativa en Android, o una CLI." data-de="Ein kleiner, schneller Router, der geordnete Wegpunkte in eine Polylinie verwandelt, die echten OpenStreetMap-Straßen folgt — zur Laufzeit vollständig offline. Gebaut zum Einbetten: WASM in einer Webview, eine native Bibliothek unter Android, oder eine CLI." data-fr="Un routeur petit et rapide qui transforme des points de passage ordonnés en une polyligne qui suit de vraies routes OpenStreetMap — entièrement hors ligne à l'exécution. Conçu pour être embarqué : WASM dans une webview, une bibliothèque native sous Android, ou une CLI." data-pt="Um roteador pequeno e rápido que transforma waypoints ordenados numa polilinha que segue estradas reais do OpenStreetMap — totalmente offline em tempo de execução. Feito para ser embutido: WASM numa webview, uma biblioteca nativa no Android, ou uma CLI." data-ja="順序付けられた経由地点を、実際の OpenStreetMap の道路に沿ったポリラインへと変換する、小さく高速なルーターです — 実行時は完全にオフライン。組み込みを前提に設計：WASM を webview に、ネイティブライブラリを Android に、あるいは CLI として。" data-ar="موجّه صغير وسريع يحوّل نقاط المسار المرتبة إلى خط متعدد الأضلاع يتبع طرقًا حقيقية من OpenStreetMap — يعمل دون أي اتصال بالشبكة أثناء التشغيل. مصمم ليُدمَج: WASM داخل webview، أو مكتبة أصلية على أندرويد، أو أداة سطر أوامر.">A small, fast router that turns ordered waypoints into a polyline that follows real OpenStreetMap roads — fully offline at runtime. Built to be embedded: WASM in a webview, a native library on Android, or a CLI.</p>
+
+  <div class="coords" dir="ltr">
+    <span><b>34.7071, 33.0226</b></span>
+    <span class="arrow">──▶</span>
+    <span><b>34.6841, 33.0379</b></span>
+    <span class="arrow">·</span>
+    <span>car · 2143.7 m · connected</span>
+  </div>
+
+  <div class="cta-row">
+    <a class="btn primary" href="https://github.com/Gegirhasut/roughroute" data-en="View on GitHub" data-ru="Смотреть на GitHub" data-zh="在 GitHub 上查看" data-es="Ver en GitHub" data-de="Auf GitHub ansehen" data-fr="Voir sur GitHub" data-pt="Ver no GitHub" data-ja="GitHub で見る" data-ar="عرضه على GitHub">View on GitHub</a>
+    <a class="btn ghost" href="https://github.com/Gegirhasut/roughroute/releases" data-en="Download region graphs ↓" data-ru="Скачать графы регионов ↓" data-zh="下载区域图 ↓" data-es="Descargar grafos regionales ↓" data-de="Regionsgraphen herunterladen ↓" data-fr="Télécharger les graphes régionaux ↓" data-pt="Baixar grafos regionais ↓" data-ja="リージョングラフをダウンロード ↓" data-ar="تنزيل رسوم بيانية إقليمية ↓">Download region graphs ↓</a>
+  </div>
+</header>
+
+<!-- WHAT -->
+<section id="what">
+  <div class="wrap">
+    <div class="sec-head">
+      <span class="eyebrow" data-en="What it is" data-ru="Что это" data-zh="这是什么" data-es="Qué es" data-de="Was es ist" data-fr="Ce que c'est" data-pt="O que é" data-ja="概要" data-ar="ما هو">What it is</span>
+      <h2 data-en="One job, done small and fast." data-ru="Одна задача — компактно и быстро." data-zh="一件事，做到小而快。" data-es="Una sola tarea, hecha pequeña y rápida." data-de="Eine Aufgabe, klein und schnell erledigt." data-fr="Une seule tâche, faite petite et rapide." data-pt="Uma única tarefa, feita pequena e rápida." data-ja="たった一つの仕事を、小さく速くこなす。" data-ar="مهمة واحدة، تُنجَز صغيرة وسريعة.">One job, done small and fast.</h2>
+      <p data-en="roughroute isn't a navigation engine. It's a route &lt;em&gt;source&lt;/em&gt;: give it A→B→C and a profile, get back a dense line that hugs the road network. No servers, no network at runtime." data-ru="roughroute — не навигационный движок. Это &lt;em&gt;источник&lt;/em&gt; маршрута: дайте ему точки A→B→C и профиль — получите плотную линию, идущую вдоль дорожной сети. Никаких серверов, никакой сети в рантайме." data-zh="roughroute 不是导航引擎，而是一个路线&lt;em&gt;来源&lt;/em&gt;：给它 A→B→C 和一个出行方式，它就返回一条紧贴路网的密集折线。运行时没有服务器，没有网络。" data-es="roughroute no es un motor de navegación. Es una &lt;em&gt;fuente&lt;/em&gt; de rutas: dale A→B→C y un perfil, y obtén una línea densa que se ciñe a la red vial. Sin servidores, sin red en tiempo de ejecución." data-de="roughroute ist keine Navigations-Engine. Es ist eine Routen-&lt;em&gt;Quelle&lt;/em&gt;: gib ihm A→B→C und ein Profil, bekomme eine dichte Linie zurück, die dem Straßennetz folgt. Keine Server, keine Netzwerkverbindung zur Laufzeit." data-fr="roughroute n'est pas un moteur de navigation. C'est une &lt;em&gt;source&lt;/em&gt; d'itinéraires : donnez-lui A→B→C et un profil, récupérez une ligne dense qui colle au réseau routier. Pas de serveurs, pas de réseau à l'exécution." data-pt="roughroute não é um motor de navegação. É uma &lt;em&gt;fonte&lt;/em&gt; de rotas: dê a ele A→B→C e um perfil, receba de volta uma linha densa que se agarra à malha viária. Sem servidores, sem rede em tempo de execução." data-ja="roughroute はナビゲーションエンジンではありません。ルートの&lt;em&gt;ソース&lt;/em&gt;です：A→B→C と移動プロファイルを渡せば、道路網に沿った密なラインが返ってきます。サーバーもなく、実行時のネットワークもありません。" data-ar="roughroute ليس محرك ملاحة. إنه &lt;em&gt;مصدر&lt;/em&gt; مسارات: أعطِه A→B→C وملفًا تعريفيًا للحركة، واحصل على خط كثيف يلتصق بشبكة الطرق. بلا خوادم، وبلا اتصال شبكي أثناء التشغيل.">roughroute isn't a navigation engine. It's a route <em>source</em>: give it A→B→C and a profile, get back a dense line that hugs the road network. No servers, no network at runtime.</p>
+    </div>
+    <div class="grid">
+      <div class="cell">
+        <span class="k" data-en="OFFLINE" data-ru="ОФЛАЙН" data-zh="离线" data-es="OFFLINE" data-de="OFFLINE" data-fr="HORS LIGNE" data-pt="OFFLINE" data-ja="オフライン" data-ar="دون اتصال">OFFLINE</span>
+        <h3 data-en="No network at runtime" data-ru="Никакой сети в рантайме" data-zh="运行时无需联网" data-es="Sin red en tiempo de ejecución" data-de="Keine Netzwerkverbindung zur Laufzeit" data-fr="Aucun réseau à l'exécution" data-pt="Sem rede em tempo de execução" data-ja="実行時はネットワーク不要" data-ar="لا اتصال بالشبكة أثناء التشغيل">No network at runtime</h3>
+        <p data-en="The runtime eats a pre-built binary graph as raw bytes and returns a polyline. It never opens a socket or touches a file." data-ru="Рантайм получает предсобранный бинарный граф как сырые байты и возвращает полилинию. Он никогда не открывает сокет и не трогает файловую систему." data-zh="运行时把预先构建好的二进制图当作原始字节读入，返回一条折线。它从不打开套接字，也不接触文件。" data-es="El runtime consume un grafo binario preconstruido como bytes en bruto y devuelve una polilínea. Nunca abre un socket ni toca un archivo." data-de="Die Laufzeitumgebung nimmt einen vorgefertigten Binärgraphen als Rohbytes entgegen und liefert eine Polylinie zurück. Sie öffnet nie einen Socket und rührt nie eine Datei an." data-fr="Le runtime avale un graphe binaire préconstruit sous forme d'octets bruts et renvoie une polyligne. Il n'ouvre jamais de socket ni ne touche à un fichier." data-pt="O runtime consome um grafo binário pré-construído como bytes brutos e devolve uma polilinha. Ele nunca abre um socket nem toca num arquivo." data-ja="ランタイムは事前構築されたバイナリグラフを生のバイト列として受け取り、ポリラインを返します。ソケットを開くことも、ファイルに触れることも一切ありません。" data-ar="يستهلك وقت التشغيل رسمًا بيانيًا ثنائيًا مُعدًّا مسبقًا كبايتات خام، ويعيد خطًا متعدد الأضلاع. لا يفتح مقبسًا (socket) أبدًا، ولا يلمس ملفًا أبدًا.">The runtime eats a pre-built binary graph as raw bytes and returns a polyline. It never opens a socket or touches a file.</p>
+      </div>
+      <div class="cell">
+        <span class="k" data-en="EMBEDDABLE" data-ru="ВСТРАИВАЕМОСТЬ" data-zh="可嵌入" data-es="EMBEBIBLE" data-de="EINBETTBAR" data-fr="EMBARQUABLE" data-pt="EMBUTÍVEL" data-ja="組み込み可能" data-ar="قابل للتضمين">EMBEDDABLE</span>
+        <h3 data-en="One core, three shells" data-ru="Одно ядро, три оболочки" data-zh="一个内核，三种外壳" data-es="Un núcleo, tres envolturas" data-de="Ein Kern, drei Hüllen" data-fr="Un cœur, trois coquilles" data-pt="Um núcleo, três invólucros" data-ja="一つのコア、三つの殻" data-ar="نواة واحدة، ثلاث قشور">One core, three shells</h3>
+        <p data-en="The same algorithmic core compiles to WASM (webview), a native library via UniFFI (Android/Kotlin), and a command-line tool." data-ru="Одно и то же алгоритмическое ядро компилируется в WASM (webview), нативную библиотеку через UniFFI (Android/Kotlin) и утилиту командной строки." data-zh="同一个算法内核可编译为 WASM（webview）、通过 UniFFI 生成的原生库（Android/Kotlin），以及命令行工具。" data-es="El mismo núcleo algorítmico compila a WASM (webview), a una librería nativa vía UniFFI (Android/Kotlin), y a una herramienta de línea de comandos." data-de="Derselbe algorithmische Kern kompiliert zu WASM (Webview), einer nativen Bibliothek via UniFFI (Android/Kotlin), und einem Kommandozeilenwerkzeug." data-fr="Le même cœur algorithmique compile vers WASM (webview), une bibliothèque native via UniFFI (Android/Kotlin), et un outil en ligne de commande." data-pt="O mesmo núcleo algorítmico compila para WASM (webview), uma biblioteca nativa via UniFFI (Android/Kotlin), e uma ferramenta de linha de comando." data-ja="同じアルゴリズムコアが WASM（webview 向け）、UniFFI 経由のネイティブライブラリ（Android/Kotlin）、そしてコマンドラインツールへとコンパイルされます。" data-ar="نفس النواة الخوارزمية تُجمَّع إلى WASM (لعرض الويب)، ومكتبة أصلية عبر UniFFI (أندرويد/Kotlin)، وأداة سطر أوامر.">The same algorithmic core compiles to WASM (webview), a native library via UniFFI (Android/Kotlin), and a command-line tool.</p>
+      </div>
+      <div class="cell">
+        <span class="k" data-en="FAST" data-ru="СКОРОСТЬ" data-zh="快速" data-es="RÁPIDO" data-de="SCHNELL" data-fr="RAPIDE" data-pt="RÁPIDO" data-ja="高速" data-ar="سريع">FAST</span>
+        <h3 data-en="Single-digit millisecond queries" data-ru="Запросы за единицы миллисекунд" data-zh="个位数毫秒级查询" data-es="Consultas de milisegundos de un dígito" data-de="Abfragen im einstelligen Millisekundenbereich" data-fr="Requêtes en millisecondes à un chiffre" data-pt="Consultas em milissegundos de um dígito" data-ja="一桁ミリ秒台のクエリ" data-ar="استعلامات بأجزاء من الثانية بمرتبة آحاد المللي ثانية">Single-digit millisecond queries</h3>
+        <p data-en="Plain A* over a compressed graph. A route across a city or island resolves in milliseconds — no contraction hierarchies needed." data-ru="Обычный A* по сжатому графу. Маршрут через город или остров считается за миллисекунды — без contraction hierarchies." data-zh="在压缩图上运行朴素 A*。跨越一座城市或一整座岛屿的路线在几毫秒内即可求解——无需 contraction hierarchies。" data-es="A* simple sobre un grafo comprimido. Una ruta a través de una ciudad o una isla se resuelve en milisegundos — sin necesidad de contraction hierarchies." data-de="Einfaches A* über einem komprimierten Graphen. Eine Route quer durch eine Stadt oder Insel löst sich in Millisekunden — ganz ohne contraction hierarchies." data-fr="Un A* simple sur un graphe compressé. Un itinéraire à travers une ville ou une île se résout en quelques millisecondes — sans contraction hierarchies." data-pt="A* simples sobre um grafo comprimido. Uma rota através de uma cidade ou ilha se resolve em milissegundos — sem necessidade de contraction hierarchies." data-ja="圧縮グラフ上での素朴な A*。都市や島をまたぐルートも、contraction hierarchies なしでミリ秒単位で解決します。" data-ar="خوارزمية A* بسيطة فوق رسم بياني مضغوط. يُحسَم مسار عبر مدينة أو جزيرة كاملة خلال مللي ثوانٍ — دون الحاجة إلى contraction hierarchies.">Plain A* over a compressed graph. A route across a city or island resolves in milliseconds — no contraction hierarchies needed.</p>
+      </div>
+      <div class="cell">
+        <span class="k" data-en="COMPACT" data-ru="КОМПАКТНОСТЬ" data-zh="紧凑" data-es="COMPACTO" data-de="KOMPAKT" data-fr="COMPACT" data-pt="COMPACTO" data-ja="コンパクト" data-ar="مُدمَج">COMPACT</span>
+        <h3 data-en="Graphs measured in megabytes" data-ru="Графы размером в мегабайты" data-zh="以兆字节计的图" data-es="Grafos medidos en megabytes" data-de="Graphen in Megabyte-Größe" data-fr="Des graphes mesurés en mégaoctets" data-pt="Grafos medidos em megabytes" data-ja="数メガバイト単位のグラフ" data-ar="رسوم بيانية تُقاس بالميغابايت">Graphs measured in megabytes</h3>
+        <p data-en="Degree-2 collapse plus delta-compressed geometry. A whole country's road graph downloads like a single image." data-ru="Схлопывание цепочек степени 2 плюс геометрия со сжатием дельта-кодированием. Дорожный граф целой страны скачивается как одна картинка." data-zh="度数为 2 的链路折叠，加上增量压缩的几何数据。一整个国家的路网图下载起来就像一张图片。" data-es="Colapso de cadenas de grado 2 más geometría comprimida por delta. El grafo vial de un país entero se descarga como una sola imagen." data-de="Kollaps von Grad-2-Ketten plus deltakomprimierte Geometrie. Der Straßengraph eines ganzen Landes lädt sich herunter wie ein einzelnes Bild." data-fr="Effondrement des chaînes de degré 2 plus une géométrie compressée par delta. Le graphe routier d'un pays entier se télécharge comme une simple image." data-pt="Colapso de cadeias de grau 2 mais geometria comprimida por delta. O grafo viário de um país inteiro baixa como uma única imagem." data-ja="次数 2 の連鎖の畳み込みに加え、デルタ圧縮されたジオメトリ。一国全体の道路グラフが、一枚の画像程度の容量でダウンロードできます。" data-ar="طيّ السلاسل ذات الدرجة 2 إضافة إلى هندسة مضغوطة بالفروق (delta). يُحمَّل الرسم البياني لطرق بلد كامل وكأنه صورة واحدة.">Degree-2 collapse plus delta-compressed geometry. A whole country's road graph downloads like a single image.</p>
+      </div>
+      <div class="cell">
+        <span class="k" data-en="PROFILES" data-ru="ПРОФИЛИ" data-zh="出行方式" data-es="PERFILES" data-de="PROFILE" data-fr="PROFILS" data-pt="PERFIS" data-ja="プロファイル" data-ar="ملفات الحركة">PROFILES</span>
+        <h3 data-en="Car and foot" data-ru="Машина и пешеход" data-zh="驾车与步行" data-es="Coche y a pie" data-de="Auto und zu Fuß" data-fr="Voiture et à pied" data-pt="Carro e a pé" data-ja="車と徒歩" data-ar="سيارة ومشي">Car and foot</h3>
+        <p data-en="One graph carries both. An access bitmask per edge; the profile filters at query time — a pedestrian never snaps onto a motorway." data-ru="Один граф несёт оба профиля. Битовая маска доступа на каждое ребро; профиль фильтрует их в момент запроса — пешеход никогда не попадёт на автомагистраль." data-zh="一张图同时承载两者。每条边带一个访问位掩码；出行方式在查询时过滤——行人绝不会被吸附到高速公路上。" data-es="Un solo grafo lleva ambos. Una máscara de acceso por arista; el perfil filtra en el momento de la consulta — un peatón nunca se ajusta a una autopista." data-de="Ein Graph trägt beide. Eine Zugriffsbitmaske pro Kante; das Profil filtert zur Abfragezeit — ein Fußgänger landet nie auf einer Autobahn." data-fr="Un seul graphe porte les deux. Un masque de bits d'accès par arête ; le profil filtre au moment de la requête — un piéton ne s'accroche jamais à une autoroute." data-pt="Um único grafo carrega os dois. Uma máscara de bits de acesso por aresta; o perfil filtra no momento da consulta — um pedestre nunca gruda numa rodovia." data-ja="一つのグラフが両方を担います。エッジごとのアクセスビットマスクをクエリ時にプロファイルでフィルタリング — 歩行者が高速道路にスナップされることはありません。" data-ar="يحمل رسم بياني واحد كليهما. قناع بتات وصول لكل ضلع؛ يُصفّي ملف الحركة عند وقت الاستعلام — فلا يُلصَق المُشاة أبدًا بطريق سريع.">One graph carries both. An access bitmask per edge; the profile filters at query time — a pedestrian never snaps onto a motorway.</p>
+      </div>
+      <div class="cell">
+        <span class="k" data-en="DETERMINISTIC" data-ru="ДЕТЕРМИНИРОВАННОСТЬ" data-zh="确定性" data-es="DETERMINISTA" data-de="DETERMINISTISCH" data-fr="DÉTERMINISTE" data-pt="DETERMINÍSTICO" data-ja="決定的" data-ar="حتمي">DETERMINISTIC</span>
+        <h3 data-en="Same input, same bytes" data-ru="Один вход — одни и те же байты" data-zh="相同输入，相同字节" data-es="Misma entrada, mismos bytes" data-de="Gleiche Eingabe, gleiche Bytes" data-fr="Même entrée, mêmes octets" data-pt="Mesma entrada, mesmos bytes" data-ja="同じ入力には同じバイト列" data-ar="نفس الإدخال، نفس البايتات">Same input, same bytes</h3>
+        <p data-en="Stable ordering and integer costs. Identical waypoints produce an identical line — reproducible builds, golden-testable." data-ru="Стабильный порядок и целочисленные издержки. Одинаковые точки маршрута дают одинаковую линию — воспроизводимые сборки, проверяемые golden-тестами." data-zh="稳定的排序与整数成本。相同的途经点总是产生完全相同的线——可复现的构建，可用于 golden 测试。" data-es="Orden estable y costes enteros. Los mismos waypoints producen la misma línea — builds reproducibles, comprobables con tests golden." data-de="Stabile Reihenfolge und ganzzahlige Kosten. Identische Wegpunkte erzeugen eine identische Linie — reproduzierbare Builds, mit Golden-Tests prüfbar." data-fr="Ordre stable et coûts entiers. Des points de passage identiques produisent une ligne identique — builds reproductibles, testables par golden tests." data-pt="Ordenação estável e custos inteiros. Waypoints idênticos produzem uma linha idêntica — builds reprodutíveis, testáveis com golden tests." data-ja="安定した順序と整数コスト。同一の経由地点は必ず同一のラインを生成します — 再現可能なビルド、golden テストでの検証も可能です。" data-ar="ترتيب ثابت وتكاليف صحيحة (أعداد صحيحة). تنتج نقاط المسار المتطابقة خطًا مطابقًا — بُنى قابلة لإعادة الإنتاج، وقابلة للاختبار عبر golden tests.">Stable ordering and integer costs. Identical waypoints produce an identical line — reproducible builds, golden-testable.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- WHY -->
+<section id="why">
+  <div class="wrap">
+    <div class="sec-head">
+      <span class="eyebrow" data-en="Why it exists" data-ru="Зачем это нужно" data-zh="为何存在" data-es="Por qué existe" data-de="Warum es existiert" data-fr="Pourquoi il existe" data-pt="Por que existe" data-ja="存在理由" data-ar="لماذا وُجد">Why it exists</span>
+      <h2 data-en="When you need &lt;em&gt;a&lt;/em&gt; line, not turn-by-turn truth." data-ru="Когда нужна &lt;em&gt;какая-то&lt;/em&gt; линия, а не точная навигация." data-zh="当你需要&lt;em&gt;一条&lt;/em&gt;路线，而非精确导航。" data-es="Cuando necesitas &lt;em&gt;una&lt;/em&gt; línea, no la verdad giro a giro." data-de="Wenn du &lt;em&gt;eine&lt;/em&gt; Linie brauchst, keine Wahrheit Abbiegung für Abbiegung." data-fr="Quand il vous faut &lt;em&gt;une&lt;/em&gt; ligne, pas une vérité virage par virage." data-pt="Quando você precisa de &lt;em&gt;uma&lt;/em&gt; linha, não da verdade curva a curva." data-ja="必要なのは&lt;em&gt;とにかく&lt;/em&gt;一本の線であって、ターン・バイ・ターンの正確さではないとき。" data-ar="حين تحتاج إلى &lt;em&gt;خط ما&lt;/em&gt;، لا إلى حقيقة كل انعطافة على حدة.">When you need <em>a</em> line, not turn-by-turn truth.</h2>
+      <p data-en="roughroute was built as a swappable route provider for a location-simulation tool — one that plays a route back as mock GPS. For that, &quot;some road-following line between A and B&quot; matters more than a legally perfect maneuver." data-ru="roughroute создавался как подменяемый поставщик маршрутов для инструмента симуляции местоположения — того, что воспроизводит маршрут как имитацию GPS. Для этого «какая-то линия вдоль дорог между A и B» важнее, чем юридически безупречный манёвр." data-zh="roughroute 最初是为一个位置模拟工具打造的可替换路线提供者——该工具把路线回放为模拟 GPS。对此而言，“A 到 B 之间某条沿路的线”远比一个合法的完美转向更重要。" data-es="roughroute se construyó como un proveedor de rutas intercambiable para una herramienta de simulación de ubicación — una que reproduce una ruta como un GPS simulado. Para eso, “alguna línea que siga la carretera entre A y B” importa más que una maniobra legalmente perfecta." data-de="roughroute wurde als austauschbarer Routenanbieter für ein Standort-Simulationstool gebaut — eines, das eine Route als simuliertes GPS abspielt. Dafür zählt „irgendeine straßenfolgende Linie zwischen A und B" mehr als ein rechtlich einwandfreies Manöver." data-fr="roughroute a été conçu comme un fournisseur d'itinéraires interchangeable pour un outil de simulation de position — un outil qui rejoue un itinéraire comme un GPS simulé. Pour cela, « une ligne qui suit à peu près la route entre A et B » compte plus qu'une manœuvre légalement parfaite." data-pt="roughroute foi construído como um provedor de rotas substituível para uma ferramenta de simulação de localização — uma que reproduz uma rota como um GPS simulado. Para isso, “alguma linha que siga a estrada entre A e B” importa mais do que uma manobra legalmente perfeita." data-ja="roughroute は、ロケーションシミュレーションツール向けの差し替え可能なルートプロバイダーとして作られました — ルートを模擬 GPS として再生するツールです。そのためには、法的に完璧な運転操作よりも「A と B の間をおおむね道路沿いに結ぶ何らかの線」の方が重要です。" data-ar="بُني roughroute كمزوّد مسارات قابل للاستبدال لأداة محاكاة موقع — أداة تعيد تشغيل مسار كأنه GPS مُحاكى. لهذا الغرض، فإن «وجود خط ما يتبع الطريق تقريبًا بين A و B» أهم من مناورة قانونية مثالية.">roughroute was built as a swappable route provider for a location-simulation tool — one that plays a route back as mock GPS. For that, "some road-following line between A and B" matters more than a legally perfect maneuver.</p>
+    </div>
+    <div class="why">
+      <div class="col">
+        <span class="tag" data-en="The trade it makes" data-ru="На что идёт компромисс" data-zh="它所做的取舍" data-es="La concesión que hace" data-de="Der Kompromiss, den es eingeht" data-fr="Le compromis qu'il fait" data-pt="A troca que ele faz" data-ja="行っているトレードオフ" data-ar="المقايضة التي يقوم بها">The trade it makes</span>
+        <p data-en="It deliberately ignores one-ways, turn restrictions, and access tags. The maneuver isn't guaranteed legal, and travel time is coarse — cost is just distance, not a speed model. That's the simplification that keeps it tiny and instant." data-ru="Он сознательно игнорирует одностороннее движение, ограничения поворотов и теги доступа. Манёвр не гарантированно легален, а время в пути — грубая оценка: стоимость — это просто расстояние, а не модель скорости. Именно это упрощение делает его крошечным и мгновенным." data-zh="它刻意忽略单行道、转向限制和通行标签。转向不保证合法，行程时间也是粗略估算——成本只是距离，而非速度模型。正是这种简化让它保持微小和瞬时。" data-es="Ignora deliberadamente los sentidos únicos, las restricciones de giro y las etiquetas de acceso. La maniobra no está garantizada como legal, y el tiempo de viaje es tosco — el coste es solo distancia, no un modelo de velocidad. Esa es la simplificación que lo mantiene diminuto e instantáneo." data-de="Es ignoriert absichtlich Einbahnstraßen, Abbiegebeschränkungen und Zugriffs-Tags. Das Manöver ist nicht garantiert legal, und die Fahrzeit ist grob — Kosten sind nur Distanz, kein Geschwindigkeitsmodell. Das ist die Vereinfachung, die es winzig und sofort hält." data-fr="Il ignore délibérément les sens uniques, les restrictions de virage et les tags d'accès. La manœuvre n'est pas garantie légale, et le temps de trajet est grossier — le coût n'est que la distance, pas un modèle de vitesse. C'est cette simplification qui le garde minuscule et instantané." data-pt="Ele ignora deliberadamente mãos únicas, restrições de conversão e tags de acesso. A manobra não tem garantia de ser legal, e o tempo de viagem é grosseiro — o custo é só distância, não um modelo de velocidade. Essa é a simplificação que o mantém minúsculo e instantâneo." data-ja="一方通行、右左折規制、通行区分タグを意図的に無視します。運転操作の合法性は保証されず、所要時間もおおまかです — コストは単なる距離であって、速度モデルではありません。この単純化こそが、小ささと即応性を維持している理由です。" data-ar="يتجاهل عمدًا الاتجاه الواحد، وقيود الانعطاف، وعلامات الوصول. المناورة غير مضمونة القانونية، ووقت الرحلة تقديري خشن — فالتكلفة مجرد مسافة، لا نموذج سرعة. هذا التبسيط هو ما يبقيه صغيرًا وفوريًا.">It deliberately ignores one-ways, turn restrictions, and access tags. The maneuver isn't guaranteed legal, and travel time is coarse — cost is just distance, not a speed model. That's the simplification that keeps it tiny and instant.</p>
+        <p data-en="So the trajectory is plausible, not always correct: it may run the wrong way down a one-way street or take a turn a car couldn't. For mock-GPS playback that's fine; for real navigation it isn't." data-ru="Поэтому траектория правдоподобна, но не всегда верна: она может пойти против одностороннего движения или свернуть там, где машина не смогла бы. Для воспроизведения имитации GPS это нормально; для настоящей навигации — нет." data-zh="所以路径是合理的，但不总是正确的：它可能逆着单行道走，或做一个汽车无法完成的转向。对于模拟 GPS 回放来说没问题；对真实导航则不行。" data-es="Así que la trayectoria es plausible, no siempre correcta: puede circular en contra de una calle de sentido único o tomar un giro que un coche no podría. Para la reproducción de un GPS simulado está bien; para navegación real no lo está." data-de="Die Trajektorie ist also plausibel, nicht immer korrekt: Sie kann eine Einbahnstraße falsch herum befahren oder eine Abbiegung nehmen, die ein Auto nicht könnte. Für Mock-GPS-Wiedergabe ist das in Ordnung; für echte Navigation nicht." data-fr="La trajectoire est donc plausible, pas toujours correcte : elle peut remonter une rue à sens unique ou prendre un virage qu'une voiture ne pourrait pas faire. Pour rejouer un GPS simulé, c'est très bien ; pour la navigation réelle, non." data-pt="Então a trajetória é plausível, nem sempre correta: pode seguir na contramão de uma via de mão única ou fazer uma conversão que um carro não conseguiria. Para reprodução de GPS simulado, tudo bem; para navegação real, não." data-ja="そのため軌跡はもっともらしいものではあっても、常に正しいとは限りません：一方通行を逆走したり、車には不可能な右左折をすることもあります。模擬 GPS の再生には十分ですが、実際のナビゲーションには向きません。" data-ar="لذا فإن المسار معقول، لكنه ليس صحيحًا دائمًا: قد يسلك اتجاهًا معاكسًا في شارع باتجاه واحد، أو ينعطف انعطافًا لا تستطيعه سيارة. لإعادة تشغيل GPS محاكى فذلك مقبول؛ أما للملاحة الحقيقية فلا.">So the trajectory is plausible, not always correct: it may run the wrong way down a one-way street or take a turn a car couldn't. For mock-GPS playback that's fine; for real navigation it isn't.</p>
+        <p data-en="If no path is found, it doesn't fail — it drops a straight segment and flags &lt;code&gt;fallback: true&lt;/code&gt;. &quot;Some route&quot; beats an honest refusal when you're feeding a playback pipeline." data-ru="Если путь не найден, это не сбой — прокладывается прямой отрезок и выставляется флаг &lt;code&gt;fallback: true&lt;/code&gt;. «Какой-то маршрут» лучше честного отказа, когда вы питаете конвейер воспроизведения." data-zh="如果找不到路径，它不会失败——而是插入一段直线，并标记 &lt;code&gt;fallback: true&lt;/code&gt;。当你在为回放管线供数时，“有条路线”胜过诚实地拒绝服务。" data-es="Si no encuentra un camino, no falla — traza un segmento recto y marca &lt;code&gt;fallback: true&lt;/code&gt;. “Alguna ruta” gana a un rechazo honesto cuando estás alimentando un pipeline de reproducción." data-de="Wird kein Pfad gefunden, schlägt es nicht fehl — es legt ein gerades Segment und markiert &lt;code&gt;fallback: true&lt;/code&gt;. „Irgendeine Route" schlägt eine ehrliche Ablehnung, wenn du eine Wiedergabe-Pipeline fütterst." data-fr="Si aucun chemin n'est trouvé, il n'échoue pas — il trace un segment droit et signale &lt;code&gt;fallback: true&lt;/code&gt;. « Un itinéraire quelconque » vaut mieux qu'un refus honnête quand vous alimentez un pipeline de rejeu." data-pt="Se nenhum caminho é encontrado, ele não falha — traça um segmento reto e sinaliza &lt;code&gt;fallback: true&lt;/code&gt;. “Alguma rota” vale mais que uma recusa honesta quando você está alimentando um pipeline de reprodução." data-ja="経路が見つからない場合も失敗にはせず、直線区間を引いて &lt;code&gt;fallback: true&lt;/code&gt; を立てます。再生パイプラインに供給している場面では、正直な拒否よりも「何らかのルート」の方が価値があります。" data-ar="إن لم يُعثَر على مسار، فهو لا يفشل — بل يرسم قطعة مستقيمة ويُفعِّل العلامة &lt;code&gt;fallback: true&lt;/code&gt;. «مسار ما» أفضل من رفض صريح حين تُغذّي خط أنابيب لإعادة التشغيل.">If no path is found, it doesn't fail — it drops a straight segment and flags <code>fallback: true</code>. "Some route" beats an honest refusal when you're feeding a playback pipeline.</p>
+      </div>
+      <div class="col honest">
+        <span class="tag" data-en="vs. OSRM &amp; Valhalla — technically" data-ru="vs. OSRM &amp; Valhalla — с технической точки зрения" data-zh="对比 OSRM &amp; Valhalla——技术层面" data-es="vs. OSRM &amp; Valhalla — técnicamente" data-de="vs. OSRM &amp; Valhalla — technisch" data-fr="vs. OSRM &amp; Valhalla — techniquement" data-pt="vs. OSRM &amp; Valhalla — tecnicamente" data-ja="vs. OSRM &amp; Valhalla — 技術的な比較" data-ar="مقارنة بـ OSRM &amp; Valhalla — من الناحية التقنية">vs. OSRM &amp; Valhalla — technically</span>
+        <p data-en="Production engines bake in the whole truth: one-ways, turn restrictions, speed-based costing, maneuver narrative, and multi-level contraction hierarchies. That correctness is exactly what makes their graphs and binaries heavy, and why on-device they lean on tiled, partially-loaded data." data-ru="Промышленные движки закладывают всю правду: одностороннее движение, ограничения поворотов, расчёт стоимости по скорости, описание манёвров и многоуровневые contraction hierarchies. Именно эта корректность делает их графы и бинарники тяжёлыми и заставляет на устройстве полагаться на тайловые, частично загружаемые данные." data-zh="生产级引擎内置了全部真相：单行道、转向限制、基于速度的计费、转向叙述，以及多层级的 contraction hierarchies。正是这种正确性让它们的图和二进制文件变得庞大，也是它们在设备端要依赖分块、部分加载数据的原因。" data-es="Los motores de producción incorporan toda la verdad: sentidos únicos, restricciones de giro, coste basado en velocidad, narrativa de maniobras, y contraction hierarchies multinivel. Esa corrección es exactamente lo que hace pesados sus grafos y binarios, y por qué en el dispositivo dependen de datos en mosaicos, cargados parcialmente." data-de="Produktions-Engines bilden die ganze Wahrheit ab: Einbahnstraßen, Abbiegebeschränkungen, geschwindigkeitsbasierte Kostenrechnung, Manöver-Erzählung und mehrstufige contraction hierarchies. Genau diese Korrektheit macht ihre Graphen und Binaries schwer und zwingt sie auf dem Gerät zu gekachelten, teilweise geladenen Daten." data-fr="Les moteurs de production intègrent toute la vérité : sens uniques, restrictions de virage, coût basé sur la vitesse, narration des manœuvres, et contraction hierarchies multi-niveaux. Cette exactitude est précisément ce qui rend leurs graphes et binaires lourds, et pourquoi sur l'appareil ils s'appuient sur des données en tuiles, chargées partiellement." data-pt="Motores de produção incorporam toda a verdade: mãos únicas, restrições de conversão, custo baseado em velocidade, narrativa de manobras, e contraction hierarchies em múltiplos níveis. Essa correção é exatamente o que torna seus grafos e binários pesados, e por que no dispositivo eles dependem de dados em blocos (tiles), carregados parcialmente." data-ja="プロダクション向けエンジンは真実のすべてを組み込みます：一方通行、右左折規制、速度ベースのコスト計算、運転操作の記述、そして多階層の contraction hierarchies。この正確さこそが、グラフやバイナリを重くし、デバイス上ではタイル分割された部分読み込みデータに頼らざるを得なくしている理由です。" data-ar="تُضمِّن محركات الإنتاج الحقيقة كاملة: الاتجاه الواحد، وقيود الانعطاف، والتسعير القائم على السرعة، وسرد المناورات، وهرميات الانكماش (contraction hierarchies) متعددة المستويات. هذه الدقة بالذات هي ما يجعل رسومها البيانية وملفاتها الثنائية ثقيلة، ولماذا تعتمد على الجهاز على بيانات مقسّمة إلى بلاطات (tiles) تُحمَّل جزئيًا.">Production engines bake in the whole truth: one-ways, turn restrictions, speed-based costing, maneuver narrative, and multi-level contraction hierarchies. That correctness is exactly what makes their graphs and binaries heavy, and why on-device they lean on tiled, partially-loaded data.</p>
+        <p data-en="roughroute drops all of that. Its graph carries only geometry and a car/foot access bit per edge — collapsed degree-2 chains and delta-encoded coordinates — so a whole country fits in tens of megabytes and loads as one flat blob. A tiny WASM core, no C++ toolchain, no tiles." data-ru="roughroute отбрасывает всё это. Его граф несёт только геометрию и бит доступа car/foot на каждое ребро — схлопнутые цепочки степени 2 и координаты с дельта-кодированием — так что граф целой страны помещается в десятки мегабайт и загружается одним плоским блоком. Крошечное WASM-ядро, без тулчейна C++, без тайлов." data-zh="roughroute 舍弃了这一切。它的图每条边只携带几何信息和一个车/步通行位——折叠的度数为 2 的链路，以及增量编码的坐标——因此整个国家能装进几十兆字节，并作为一整块扁平数据加载。一个微小的 WASM 内核，没有 C++ 工具链，没有瓦片。" data-es="roughroute prescinde de todo eso. Su grafo lleva solo geometría y un bit de acceso coche/pie por arista — cadenas de grado 2 colapsadas y coordenadas codificadas por delta — así que un país entero cabe en decenas de megabytes y se carga como un único bloque plano. Un núcleo WASM diminuto, sin toolchain de C++, sin mosaicos." data-de="roughroute wirft all das über Bord. Sein Graph trägt pro Kante nur Geometrie und ein Auto/Fuß-Zugriffsbit — kollabierte Grad-2-Ketten und deltakodierte Koordinaten — sodass ein ganzes Land in einige Dutzend Megabyte passt und als ein einziger flacher Blob lädt. Ein winziger WASM-Kern, kein C++-Toolchain, keine Kacheln." data-fr="roughroute abandonne tout cela. Son graphe ne porte que la géométrie et un bit d'accès voiture/pied par arête — chaînes de degré 2 effondrées et coordonnées codées en delta — si bien qu'un pays entier tient en quelques dizaines de mégaoctets et se charge comme un seul bloc plat. Un minuscule cœur WASM, pas de toolchain C++, pas de tuiles." data-pt="roughroute abre mão de tudo isso. Seu grafo carrega apenas geometria e um bit de acesso carro/pé por aresta — cadeias de grau 2 colapsadas e coordenadas codificadas por delta — de modo que um país inteiro cabe em dezenas de megabytes e carrega como um único bloco plano. Um núcleo WASM minúsculo, sem toolchain C++, sem tiles." data-ja="roughroute はそれらすべてを切り捨てます。グラフが持つのはジオメトリと、エッジごとの車/徒歩アクセスビットだけ — 次数 2 の連鎖を畳み込み、座標はデルタ符号化 — そのため国一つ分が数十メガバイトに収まり、一つのフラットなブロックとして読み込まれます。小さな WASM コア、C++ ツールチェーン不要、タイルも不要です。" data-ar="يتخلى roughroute عن كل ذلك. يحمل رسمه البياني الهندسة فقط وبت وصول سيارة/مشي لكل ضلع — سلاسل ذات درجة 2 مطوية، وإحداثيات مُرمَّزة بالفروق — بحيث يتسع بلد كامل في عشرات الميغابايتات ويُحمَّل ككتلة واحدة مسطّحة. نواة WASM صغيرة جدًا، بلا سلسلة أدوات ++C، وبلا بلاطات.">roughroute drops all of that. Its graph carries only geometry and a car/foot access bit per edge — collapsed degree-2 chains and delta-encoded coordinates — so a whole country fits in tens of megabytes and loads as one flat blob. A tiny WASM core, no C++ toolchain, no tiles.</p>
+        <p data-en="Net: &lt;b&gt;far smaller and simpler, deliberately less correct.&lt;/b&gt; Use OSRM or Valhalla for honest routing — roughroute plugs in &lt;em&gt;alongside&lt;/em&gt; them behind a shared contract, as the offline fallback when the network is gone or a demo server is throttled." data-ru="Итог: &lt;b&gt;значительно меньше и проще, сознательно менее корректно.&lt;/b&gt; Используйте OSRM или Valhalla для честной маршрутизации — roughroute подключается &lt;em&gt;рядом&lt;/em&gt; с ними по общему контракту, как офлайн-резерв на случай, когда сети нет или демо-сервер захлёбывается." data-zh="结果：&lt;b&gt;体积和复杂度小得多，但也刻意地不那么正确。&lt;/b&gt;需要诚实路由时请使用 OSRM 或 Valhalla——roughroute 在共享契约之下与它们&lt;em&gt;并存&lt;/em&gt;，作为网络断开或演示服务器被限流时的离线兜底方案。" data-es="En resumen: &lt;b&gt;mucho más pequeño y simple, deliberadamente menos correcto.&lt;/b&gt; Usa OSRM o Valhalla para un enrutamiento honesto — roughroute se conecta &lt;em&gt;junto a&lt;/em&gt; ellos bajo un contrato compartido, como respaldo offline para cuando no hay red o un servidor de demo está saturado." data-de="Unterm Strich: &lt;b&gt;deutlich kleiner und einfacher, bewusst weniger korrekt.&lt;/b&gt; Nutze OSRM oder Valhalla für ehrliches Routing — roughroute klinkt sich &lt;em&gt;neben&lt;/em&gt; ihnen hinter einem gemeinsamen Vertrag ein, als Offline-Rückfallebene, wenn das Netz weg oder ein Demo-Server gedrosselt ist." data-fr="Au final : &lt;b&gt;bien plus petit et plus simple, délibérément moins correct.&lt;/b&gt; Utilisez OSRM ou Valhalla pour un routage honnête — roughroute se branche &lt;em&gt;à côté&lt;/em&gt; d'eux derrière un contrat partagé, comme solution de repli hors ligne quand le réseau est absent ou qu'un serveur de démo est saturé." data-pt="Resumindo: &lt;b&gt;muito menor e mais simples, deliberadamente menos correto.&lt;/b&gt; Use OSRM ou Valhalla para roteamento honesto — roughroute se encaixa &lt;em&gt;ao lado&lt;/em&gt; deles atrás de um contrato compartilhado, como reserva offline para quando a rede cai ou um servidor de demonstração é limitado." data-ja="結果として：&lt;b&gt;はるかに小さくシンプルだが、意図的に正確さを落としている。&lt;/b&gt;正直なルーティングが必要なら OSRM や Valhalla を使ってください — roughroute は共有された契約の下、それらと&lt;em&gt;並んで&lt;/em&gt;動作し、ネットワークが失われたときやデモサーバーがスロットリングされたときのオフラインのフォールバックとなります。" data-ar="المحصلة: &lt;b&gt;أصغر وأبسط بكثير، وأقل دقة عمدًا.&lt;/b&gt; استخدم OSRM أو Valhalla لتوجيه أمين — يعمل roughroute &lt;em&gt;جنبًا إلى جنب&lt;/em&gt; معهما خلف عقد مشترك، كخيار احتياطي دون اتصال عندما تنقطع الشبكة أو يُقيَّد خادم تجريبي.">Net: <b>far smaller and simpler, deliberately less correct.</b> Use OSRM or Valhalla for honest routing — roughroute plugs in <em>alongside</em> them behind a shared contract, as the offline fallback when the network is gone or a demo server is throttled.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- HOW / pipeline -->
+<section id="how">
+  <div class="wrap">
+    <div class="sec-head">
+      <span class="eyebrow" data-en="How it works" data-ru="Как это работает" data-zh="工作原理" data-es="Cómo funciona" data-de="Wie es funktioniert" data-fr="Comment ça marche" data-pt="Como funciona" data-ja="仕組み" data-ar="كيف يعمل">How it works</span>
+      <h2 data-en="Heavy work offline. Featherweight at runtime." data-ru="Тяжёлая работа офлайн. Невесомость в рантайме." data-zh="繁重的工作离线完成，运行时轻如鸿毛。" data-es="Trabajo pesado offline. Ligereza en tiempo de ejecución." data-de="Schwere Arbeit offline. Federleicht zur Laufzeit." data-fr="Travail lourd hors ligne. Léger comme une plume à l'exécution." data-pt="Trabalho pesado offline. Leve como uma pluma em tempo de execução." data-ja="重い処理はオフラインで。実行時は羽根のように軽い。" data-ar="العمل الثقيل دون اتصال. خفة كالريشة أثناء التشغيل.">Heavy work offline. Featherweight at runtime.</h2>
+      <p data-en="The expensive step — turning raw OpenStreetMap into a graph — happens once, ahead of time. The device only ever sees the finished, compact result." data-ru="Дорогой этап — превращение сырых данных OpenStreetMap в граф — выполняется один раз, заранее. Устройство видит только готовый, компактный результат." data-zh="最昂贵的一步——把原始 OpenStreetMap 数据转换成图——只需提前做一次。设备端只会看到最终、紧凑的结果。" data-es="El paso costoso — convertir OpenStreetMap en bruto en un grafo — ocurre una sola vez, por adelantado. El dispositivo solo llega a ver el resultado final y compacto." data-de="Der teure Schritt — rohes OpenStreetMap in einen Graphen zu verwandeln — passiert einmal, im Voraus. Das Gerät bekommt nur das fertige, kompakte Ergebnis zu sehen." data-fr="L'étape coûteuse — transformer OpenStreetMap brut en graphe — se produit une seule fois, à l'avance. L'appareil ne voit jamais que le résultat final et compact." data-pt="A etapa cara — transformar OpenStreetMap bruto num grafo — acontece uma única vez, antecipadamente. O dispositivo só chega a ver o resultado final e compacto." data-ja="コストのかかる工程 — 生の OpenStreetMap データをグラフへ変換する処理 — は事前に一度だけ実行されます。デバイス側が目にするのは、完成した軽量な結果だけです。" data-ar="الخطوة المكلفة — تحويل بيانات OpenStreetMap الخام إلى رسم بياني — تحدث مرة واحدة فقط، ومسبقًا. لا يرى الجهاز إلا النتيجة النهائية المدمجة.">The expensive step — turning raw OpenStreetMap into a graph — happens once, ahead of time. The device only ever sees the finished, compact result.</p>
+    </div>
+    <div class="pipe">
+      <div class="step">
+        <span class="n" data-en="STEP 01" data-ru="ШАГ 01" data-zh="步骤 01" data-es="PASO 01" data-de="SCHRITT 01" data-fr="ÉTAPE 01" data-pt="PASSO 01" data-ja="ステップ 01" data-ar="الخطوة 01">STEP 01</span>
+        <h3 data-en="Build the graph" data-ru="Собрать граф" data-zh="构建图" data-es="Construir el grafo" data-de="Den Graphen bauen" data-fr="Construire le graphe" data-pt="Construir o grafo" data-ja="グラフを構築する" data-ar="بناء الرسم البياني">Build the graph</h3>
+        <p data-en="A preprocessor reads a Geofabrik &lt;code&gt;.osm.pbf&lt;/code&gt;, keeps the roads, and writes a compact versioned &lt;code&gt;.graph&lt;/code&gt; — collapsed and delta-compressed." data-ru="Препроцессор читает Geofabrik &lt;code&gt;.osm.pbf&lt;/code&gt;, оставляет дороги и записывает компактный версионированный &lt;code&gt;.graph&lt;/code&gt; — схлопнутый и сжатый дельта-кодированием." data-zh="预处理器读取 Geofabrik 的 &lt;code&gt;.osm.pbf&lt;/code&gt;，保留道路，写出一个紧凑的、带版本号的 &lt;code&gt;.graph&lt;/code&gt;——已折叠并经过增量压缩。" data-es="Un preprocesador lee un &lt;code&gt;.osm.pbf&lt;/code&gt; de Geofabrik, conserva las carreteras, y escribe un &lt;code&gt;.graph&lt;/code&gt; compacto y versionado — colapsado y comprimido por delta." data-de="Ein Präprozessor liest ein Geofabrik-&lt;code&gt;.osm.pbf&lt;/code&gt;, behält die Straßen und schreibt ein kompaktes, versioniertes &lt;code&gt;.graph&lt;/code&gt; — kollabiert und deltakomprimiert." data-fr="Un préprocesseur lit un &lt;code&gt;.osm.pbf&lt;/code&gt; Geofabrik, garde les routes, et écrit un &lt;code&gt;.graph&lt;/code&gt; compact et versionné — effondré et compressé par delta." data-pt="Um pré-processador lê um &lt;code&gt;.osm.pbf&lt;/code&gt; da Geofabrik, mantém as estradas, e escreve um &lt;code&gt;.graph&lt;/code&gt; compacto e versionado — colapsado e comprimido por delta." data-ja="プリプロセッサが Geofabrik の &lt;code&gt;.osm.pbf&lt;/code&gt; を読み込み、道路だけを残して、コンパクトでバージョン管理された &lt;code&gt;.graph&lt;/code&gt; を書き出します — 畳み込み済み、デルタ圧縮済みです。" data-ar="تقرأ أداة معالجة مسبقة ملف &lt;code&gt;.osm.pbf&lt;/code&gt; من Geofabrik، وتُبقي الطرق فقط، وتكتب &lt;code&gt;.graph&lt;/code&gt; مدمجًا ومُرقَّمًا بإصدار — مطويًا ومضغوطًا بالفروق.">A preprocessor reads a Geofabrik <code>.osm.pbf</code>, keeps the roads, and writes a compact versioned <code>.graph</code> — collapsed and delta-compressed.</p>
+        <div class="env" data-en="dev machine / CI · once per region" data-ru="dev-машина / CI · один раз на регион" data-zh="开发机 / CI · 每个区域一次" data-es="máquina de desarrollo / CI · una vez por región" data-de="Dev-Rechner / CI · einmal pro Region" data-fr="machine de dev / CI · une fois par région" data-pt="máquina de dev / CI · uma vez por região" data-ja="開発マシン / CI・リージョンごとに一度" data-ar="جهاز تطوير / CI · مرة واحدة لكل منطقة">dev machine / CI · once per region</div>
+      </div>
+      <div class="step">
+        <span class="n" data-en="STEP 02" data-ru="ШАГ 02" data-zh="步骤 02" data-es="PASO 02" data-de="SCHRITT 02" data-fr="ÉTAPE 02" data-pt="PASSO 02" data-ja="ステップ 02" data-ar="الخطوة 02">STEP 02</span>
+        <h3 data-en="Deliver the bytes" data-ru="Доставить байты" data-zh="交付字节" data-es="Entregar los bytes" data-de="Die Bytes ausliefern" data-fr="Livrer les octets" data-pt="Entregar os bytes" data-ja="バイト列を届ける" data-ar="توصيل البايتات">Deliver the bytes</h3>
+        <p data-en="The finished &lt;code&gt;.graph&lt;/code&gt; ships as a release asset. The host app downloads it once and caches it — or bundles it — then works offline forever." data-ru="Готовый &lt;code&gt;.graph&lt;/code&gt; публикуется как файл релиза. Хост-приложение скачивает его один раз и кэширует — либо встраивает — и дальше работает офлайн навсегда." data-zh="构建好的 &lt;code&gt;.graph&lt;/code&gt; 作为发布资源分发。宿主应用下载一次并缓存——或直接打包——此后永远离线运行。" data-es="El &lt;code&gt;.graph&lt;/code&gt; terminado se publica como asset de release. La app anfitriona lo descarga una vez y lo cachea — o lo empaqueta — y a partir de ahí funciona offline para siempre." data-de="Das fertige &lt;code&gt;.graph&lt;/code&gt; wird als Release-Asset ausgeliefert. Die Host-App lädt es einmal herunter und cacht es — oder bündelt es — und arbeitet danach für immer offline." data-fr="Le &lt;code&gt;.graph&lt;/code&gt; terminé est publié comme asset de release. L'appli hôte le télécharge une fois et le met en cache — ou l'embarque — puis fonctionne hors ligne pour toujours." data-pt="O &lt;code&gt;.graph&lt;/code&gt; pronto é publicado como asset de release. O app anfitrião o baixa uma vez e armazena em cache — ou o empacota — e depois funciona offline para sempre." data-ja="完成した &lt;code&gt;.graph&lt;/code&gt; はリリースアセットとして配布されます。ホストアプリは一度だけダウンロードしてキャッシュする — あるいはバンドルする — ことで、以後は永久にオフラインで動作します。" data-ar="يُنشَر &lt;code&gt;.graph&lt;/code&gt; الجاهز كأصل إصدار. يقوم التطبيق المضيف بتنزيله مرة واحدة وتخزينه مؤقتًا — أو تضمينه — ثم يعمل دون اتصال إلى الأبد.">The finished <code>.graph</code> ships as a release asset. The host app downloads it once and caches it — or bundles it — then works offline forever.</p>
+        <div class="env" data-en="CDN / release · optional, one time" data-ru="CDN / релиз · опционально, один раз" data-zh="CDN / 发布 · 可选，一次性" data-es="CDN / release · opcional, una vez" data-de="CDN / Release · optional, einmalig" data-fr="CDN / release · optionnel, une fois" data-pt="CDN / release · opcional, uma vez" data-ja="CDN / リリース・任意・一度きり" data-ar="شبكة توصيل محتوى / إصدار · اختياري، مرة واحدة">CDN / release · optional, one time</div>
+      </div>
+      <div class="step">
+        <span class="n" data-en="STEP 03" data-ru="ШАГ 03" data-zh="步骤 03" data-es="PASO 03" data-de="SCHRITT 03" data-fr="ÉTAPE 03" data-pt="PASSO 03" data-ja="ステップ 03" data-ar="الخطوة 03">STEP 03</span>
+        <h3 data-en="Route on device" data-ru="Маршрут на устройстве" data-zh="在设备上路由" data-es="Enrutar en el dispositivo" data-de="Auf dem Gerät routen" data-fr="Router sur l'appareil" data-pt="Rotear no dispositivo" data-ja="デバイス上でルーティング" data-ar="التوجيه على الجهاز">Route on device</h3>
+        <p data-en="Load the graph from raw bytes, snap the waypoints onto real roads, run A*, and return the polyline plus its length in meters." data-ru="Граф загружается из сырых байтов, точки маршрута привязываются к реальным дорогам, выполняется A*, возвращается полилиния и её длина в метрах." data-zh="从原始字节加载图，把途经点吸附到真实道路上，运行 A*，返回折线及其以米为单位的长度。" data-es="Carga el grafo desde bytes en bruto, ajusta los waypoints a carreteras reales, ejecuta A*, y devuelve la polilínea junto con su longitud en metros." data-de="Den Graphen aus Rohbytes laden, die Wegpunkte auf echte Straßen einrasten, A* ausführen, und die Polylinie samt ihrer Länge in Metern zurückgeben." data-fr="Charger le graphe depuis des octets bruts, accrocher les points de passage à de vraies routes, exécuter A*, et renvoyer la polyligne ainsi que sa longueur en mètres." data-pt="Carrega o grafo a partir de bytes brutos, ajusta os waypoints a estradas reais, executa A*, e devolve a polilinha junto com seu comprimento em metros." data-ja="生のバイト列からグラフを読み込み、経由地点を実際の道路にスナップし、A* を実行して、ポリラインとそのメートル単位の長さを返します。" data-ar="يُحمَّل الرسم البياني من بايتات خام، وتُلصَق نقاط المسار بطرق حقيقية، وتُنفَّذ خوارزمية A*، ويُعاد الخط المتعدد الأضلاع مع طوله بالأمتار.">Load the graph from raw bytes, snap the waypoints onto real roads, run A*, and return the polyline plus its length in meters.</p>
+        <div class="env" data-en="phone / webview · fully offline" data-ru="телефон / webview · полностью офлайн" data-zh="手机 / webview · 完全离线" data-es="teléfono / webview · totalmente offline" data-de="Telefon / Webview · vollständig offline" data-fr="téléphone / webview · entièrement hors ligne" data-pt="celular / webview · totalmente offline" data-ja="スマートフォン / webview・完全オフライン" data-ar="هاتف / webview · دون اتصال كليًا">phone / webview · fully offline</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- USE / code -->
+<section id="use">
+  <div class="wrap">
+    <div class="sec-head">
+      <span class="eyebrow" data-en="Using it" data-ru="Как использовать" data-zh="如何使用" data-es="Cómo usarlo" data-de="Verwendung" data-fr="Comment l'utiliser" data-pt="Como usar" data-ja="使い方" data-ar="كيفية استخدامه">Using it</span>
+      <h2 data-en="Two calls: load a graph, ask for a route." data-ru="Два вызова: загрузить граф, запросить маршрут." data-zh="两次调用：加载图，请求路线。" data-es="Dos llamadas: cargar un grafo, pedir una ruta." data-de="Zwei Aufrufe: einen Graphen laden, eine Route anfragen." data-fr="Deux appels : charger un graphe, demander un itinéraire." data-pt="Duas chamadas: carregar um grafo, pedir uma rota." data-ja="呼び出しは二回：グラフを読み込み、ルートを求める。" data-ar="استدعاءان اثنان: تحميل رسم بياني، وطلب مسار.">Two calls: load a graph, ask for a route.</h2>
+      <p data-en="The same neutral contract everywhere — &lt;code&gt;[lat, lon]&lt;/code&gt; in, &lt;code&gt;{ line, meters, fallback }&lt;/code&gt; out." data-ru="Единый нейтральный контракт везде — &lt;code&gt;[lat, lon]&lt;/code&gt; на входе, &lt;code&gt;{ line, meters, fallback }&lt;/code&gt; на выходе." data-zh="处处统一的中立契约——输入 &lt;code&gt;[lat, lon]&lt;/code&gt;，输出 &lt;code&gt;{ line, meters, fallback }&lt;/code&gt;。" data-es="El mismo contrato neutral en todas partes — &lt;code&gt;[lat, lon]&lt;/code&gt; de entrada, &lt;code&gt;{ line, meters, fallback }&lt;/code&gt; de salida." data-de="Überall derselbe neutrale Vertrag — &lt;code&gt;[lat, lon]&lt;/code&gt; rein, &lt;code&gt;{ line, meters, fallback }&lt;/code&gt; raus." data-fr="Le même contrat neutre partout — &lt;code&gt;[lat, lon]&lt;/code&gt; en entrée, &lt;code&gt;{ line, meters, fallback }&lt;/code&gt; en sortie." data-pt="O mesmo contrato neutro em todo lugar — &lt;code&gt;[lat, lon]&lt;/code&gt; na entrada, &lt;code&gt;{ line, meters, fallback }&lt;/code&gt; na saída." data-ja="どこでも同じ中立な契約 — 入力は &lt;code&gt;[lat, lon]&lt;/code&gt;、出力は &lt;code&gt;{ line, meters, fallback }&lt;/code&gt;。" data-ar="العقد المحايد نفسه في كل مكان — إدخال &lt;code&gt;[lat, lon]&lt;/code&gt;، وإخراج &lt;code&gt;{ line, meters, fallback }&lt;/code&gt;.">The same neutral contract everywhere — <code>[lat, lon]</code> in, <code>{ line, meters, fallback }</code> out.</p>
+    </div>
+    <div class="code-wrap" dir="ltr">
+      <div class="code-tabs">
+        <span class="on">WASM · TypeScript</span>
+        <span>CLI</span>
+      </div>
+<pre><span class="c">// load a region graph (from bundle or cache — the app's job)</span>
+<span class="k">const</span> bytes = <span class="k">await</span> loadRegionGraph();
+<span class="k">const</span> router = <span class="k">new</span> <span class="g">WasmRouter</span>(<span class="k">new</span> Uint8Array(bytes));
+
+<span class="c">// waypoints as [lat, lon]; profile is "car" or "foot"</span>
+<span class="k">const</span> res = router.<span class="g">route</span>({
+  waypoints: [[<span class="a">34.7071</span>, <span class="a">33.0226</span>], [<span class="a">34.6841</span>, <span class="a">33.0379</span>]],
+  profile: <span class="a">"car"</span>,
+});
+
+res.line     <span class="c">// → dense polyline following the roads</span>
+res.meters   <span class="c">// → 2143.7</span>
+res.fallback <span class="c">// → false</span>
+</pre>
+    </div>
+    <div class="code-wrap" dir="ltr" style="margin-top:22px">
+<pre><span class="c"># build a graph once, offline</span>
+roughroute <span class="g">build</span> --pbf cyprus.osm.pbf --out cyprus.graph --profiles car,foot
+
+<span class="c"># route, exporting to json / geojson / gpx</span>
+roughroute <span class="g">route</span> --graph cyprus.graph --profile car \
+  --via <span class="a">34.7071,33.0226</span> --via <span class="a">34.6841,33.0379</span> \
+  --format gpx &gt; route.gpx
+</pre>
+    </div>
+  </div>
+</section>
+
+<!-- REGIONS -->
+<section id="regions">
+  <div class="wrap">
+    <div class="sec-head">
+      <span class="eyebrow" data-en="Pre-built graphs" data-ru="Готовые графы" data-zh="预构建的图" data-es="Grafos preconstruidos" data-de="Vorgefertigte Graphen" data-fr="Graphes préconstruits" data-pt="Grafos pré-construídos" data-ja="構築済みグラフ" data-ar="رسوم بيانية جاهزة">Pre-built graphs</span>
+      <h2 data-en="Grab a region, or build your own." data-ru="Возьми регион или собери свой." data-zh="取用现成区域，或自行构建。" data-es="Toma una región, o construye la tuya." data-de="Nimm eine Region, oder baue deine eigene." data-fr="Prenez une région, ou construisez la vôtre." data-pt="Pegue uma região, ou construa a sua." data-ja="リージョンを選ぶか、自分で構築する。" data-ar="خذ منطقة جاهزة، أو ابنِ منطقتك الخاصة.">Grab a region, or build your own.</h2>
+      <p data-en="Region graphs are built by CI from a manifest and published as release assets, each with a recorded checksum. Add a line, push, and the pipeline bakes just that region." data-ru="Графы регионов собираются CI по манифесту и публикуются как файлы релиза, каждый с зафиксированной контрольной суммой. Добавьте строку, запушьте — и конвейер соберёт только этот регион." data-zh="区域图由 CI 根据清单构建，并作为发布资源发布，每个都带有记录的校验和。添加一行、推送，流水线就只构建那一个区域。" data-es="Los grafos regionales los construye la CI a partir de un manifiesto y se publican como assets de release, cada uno con su checksum registrado. Añade una línea, haz push, y el pipeline compila solo esa región." data-de="Regionsgraphen werden von der CI aus einem Manifest gebaut und als Release-Assets veröffentlicht, jeder mit erfasster Prüfsumme. Eine Zeile hinzufügen, pushen — und die Pipeline baut genau diese Region." data-fr="Les graphes régionaux sont construits par la CI à partir d'un manifeste et publiés comme assets de release, chacun avec une somme de contrôle enregistrée. Ajoutez une ligne, poussez, et le pipeline ne construit que cette région." data-pt="Os grafos regionais são construídos pela CI a partir de um manifesto e publicados como assets de release, cada um com um checksum registrado. Adicione uma linha, faça push, e o pipeline constrói só aquela região." data-ja="リージョングラフはマニフェストをもとに CI がビルドし、それぞれチェックサムを記録した上でリリースアセットとして公開されます。一行追加してプッシュすれば、パイプラインはそのリージョンだけをビルドします。" data-ar="تُبنى الرسوم البيانية الإقليمية بواسطة CI انطلاقًا من بيان (manifest) وتُنشر كأصول إصدار (release assets)، كل واحد منها مع مجموع اختباري (checksum) مسجَّل. أضف سطرًا واحدًا وادفعه، فيبني خط الإنتاج تلك المنطقة فقط.">Region graphs are built by CI from a manifest and published as release assets, each with a recorded checksum. Add a line, push, and the pipeline bakes just that region.</p>
+    </div>
+    <div class="regions">
+      <div class="region"><div class="name">Andorra</div><div class="size">1.1 MB</div><div class="sub">v3 graph</div></div>
+      <div class="region"><div class="name">Malta</div><div class="size">3.4 MB</div><div class="sub">v3 graph</div></div>
+      <div class="region"><div class="name">Cyprus</div><div class="size">20.8 MB</div><div class="sub">v3 graph</div></div>
+      <div class="region"><div class="name">Slovenia</div><div class="size">56.4 MB</div><div class="sub">v3 graph</div></div>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <div class="foot-grid">
+      <a href="https://github.com/Gegirhasut/roughroute">github.com/Gegirhasut/roughroute</a>
+      <a href="https://github.com/Gegirhasut/roughroute/releases" data-en="Releases" data-ru="Релизы" data-zh="发布" data-es="Releases" data-de="Releases" data-fr="Releases" data-pt="Releases" data-ja="リリース" data-ar="الإصدارات">Releases</a>
+      <a href="https://github.com/Gegirhasut/roughroute#readme" data-en="Docs" data-ru="Документация" data-zh="文档" data-es="Docs" data-de="Docs" data-fr="Docs" data-pt="Docs" data-ja="ドキュメント" data-ar="الوثائق">Docs</a>
+      <a href="https://github.com/Gegirhasut/roughroute/blob/main/LICENSE" data-en="MIT License" data-ru="Лицензия MIT" data-zh="MIT 许可证" data-es="Licencia MIT" data-de="MIT-Lizenz" data-fr="Licence MIT" data-pt="Licença MIT" data-ja="MIT ライセンス" data-ar="رخصة MIT">MIT License</a>
+    </div>
+    <p class="attrib" data-en="Map data &lt;b&gt;© OpenStreetMap contributors&lt;/b&gt;, licensed under the ODbL. roughroute is an independent open-source project and is not affiliated with the OpenStreetMap Foundation." data-ru="Картографические данные &lt;b&gt;© OpenStreetMap contributors&lt;/b&gt;, лицензированы по ODbL. roughroute — независимый open-source проект, не связанный с OpenStreetMap Foundation." data-zh="地图数据 &lt;b&gt;© OpenStreetMap contributors&lt;/b&gt;，依据 ODbL 许可发布。roughroute 是一个独立的开源项目，与 OpenStreetMap Foundation 无关。" data-es="Datos de mapa &lt;b&gt;© OpenStreetMap contributors&lt;/b&gt;, licenciados bajo la ODbL. roughroute es un proyecto de código abierto independiente y no está afiliado con la OpenStreetMap Foundation." data-de="Kartendaten &lt;b&gt;© OpenStreetMap contributors&lt;/b&gt;, lizenziert unter der ODbL. roughroute ist ein unabhängiges Open-Source-Projekt und nicht mit der OpenStreetMap Foundation verbunden." data-fr="Données cartographiques &lt;b&gt;© OpenStreetMap contributors&lt;/b&gt;, sous licence ODbL. roughroute est un projet open source indépendant et n'est pas affilié à l'OpenStreetMap Foundation." data-pt="Dados de mapa &lt;b&gt;© OpenStreetMap contributors&lt;/b&gt;, licenciados sob a ODbL. roughroute é um projeto open-source independente e não é afiliado à OpenStreetMap Foundation." data-ja="地図データ &lt;b&gt;© OpenStreetMap contributors&lt;/b&gt;、ODbL のもとでライセンスされています。roughroute は独立したオープンソースプロジェクトであり、OpenStreetMap Foundation とは提携していません。" data-ar="بيانات الخريطة &lt;b&gt;© OpenStreetMap contributors&lt;/b&gt;، مرخّصة بموجب ODbL. roughroute مشروع مفتوح المصدر مستقل وغير منتسب إلى OpenStreetMap Foundation.">Map data <b>© OpenStreetMap contributors</b>, licensed under the ODbL. roughroute is an independent open-source project and is not affiliated with the OpenStreetMap Foundation.</p>
+    <p class="byline" data-en="Built by &lt;a href='https://github.com/Gegirhasut'&gt;Maxim Popelnitskiy&lt;/a&gt; · MIT licensed" data-ru="Разработано &lt;a href='https://github.com/Gegirhasut'&gt;Maxim Popelnitskiy&lt;/a&gt; · лицензия MIT" data-zh="由 &lt;a href='https://github.com/Gegirhasut'&gt;Maxim Popelnitskiy&lt;/a&gt; 构建 · MIT 许可" data-es="Creado por &lt;a href='https://github.com/Gegirhasut'&gt;Maxim Popelnitskiy&lt;/a&gt; · licencia MIT" data-de="Gebaut von &lt;a href='https://github.com/Gegirhasut'&gt;Maxim Popelnitskiy&lt;/a&gt; · MIT-lizenziert" data-fr="Construit par &lt;a href='https://github.com/Gegirhasut'&gt;Maxim Popelnitskiy&lt;/a&gt; · sous licence MIT" data-pt="Construído por &lt;a href='https://github.com/Gegirhasut'&gt;Maxim Popelnitskiy&lt;/a&gt; · licenciado sob MIT" data-ja="制作: &lt;a href='https://github.com/Gegirhasut'&gt;Maxim Popelnitskiy&lt;/a&gt; ・MIT ライセンス" data-ar="بُني بواسطة &lt;a href='https://github.com/Gegirhasut'&gt;Maxim Popelnitskiy&lt;/a&gt; · مرخّص بموجب MIT">Built by <a href="https://github.com/Gegirhasut">Maxim Popelnitskiy</a> · MIT licensed</p>
+  </div>
+</footer>
+
+<script>
+/* ---------- language selector (EN default; others fall back to EN until translated) ---------- */
+(function(){
+  const sel = document.getElementById('langSelect');
+  if(!sel) return;
+  const rtl = ['ar','he','fa','ur'];
+  function apply(l){
+    document.documentElement.setAttribute('lang', l==='zh' ? 'zh-Hans' : l);
+    document.documentElement.setAttribute('dir', rtl.includes(l) ? 'rtl' : 'ltr');
+    document.querySelectorAll('[data-en]').forEach(el=>{
+      const val = el.getAttribute('data-'+l);
+      el.innerHTML = (val != null) ? val : el.getAttribute('data-en');   // fall back to EN
+    });
+  }
+  sel.addEventListener('change', ()=> apply(sel.value));
+})();
+
+/* ---------- signature: generate a road-like graph, then draw a route across it ---------- */
+(function(){
+  const svg = document.getElementById('graphbg');
+  const NS = 'http://www.w3.org/2000/svg';
+  const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  function build(){
+    const W = window.innerWidth, H = window.innerHeight;
+    svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+    while(svg.firstChild) svg.removeChild(svg.firstChild);
+
+    // jittered grid of nodes -> road-network feel
+    const gx = Math.max(7, Math.round(W/150));
+    const gy = Math.max(6, Math.round(H/150));
+    const cw = W/gx, ch = H/gy;
+    const nodes = [];
+    for(let j=0;j<=gy;j++){
+      for(let i=0;i<=gx;i++){
+        const jitterX = (Math.random()-0.5)*cw*0.55;
+        const jitterY = (Math.random()-0.5)*ch*0.55;
+        nodes.push({x:i*cw+jitterX, y:j*ch+jitterY, i, j});
+      }
+    }
+    const idx = (i,j)=> j*(gx+1)+i;
+    const edges = [];
+    for(let j=0;j<=gy;j++){
+      for(let i=0;i<=gx;i++){
+        if(i<gx && Math.random()>0.18) edges.push([idx(i,j), idx(i+1,j)]);
+        if(j<gy && Math.random()>0.18) edges.push([idx(i,j), idx(i,j+1)]);
+        if(i<gx && j<gy && Math.random()>0.82) edges.push([idx(i,j), idx(i+1,j+1)]);
+      }
+    }
+
+    // draw edges (roads)
+    const gEdges = document.createElementNS(NS,'g');
+    edges.forEach(([a,b])=>{
+      const n1=nodes[a], n2=nodes[b];
+      const l=document.createElementNS(NS,'line');
+      l.setAttribute('x1',n1.x); l.setAttribute('y1',n1.y);
+      l.setAttribute('x2',n2.x); l.setAttribute('y2',n2.y);
+      l.setAttribute('stroke', Math.random()>0.8 ? '#2a3d47' : '#1a262d');
+      l.setAttribute('stroke-width', Math.random()>0.85 ? 1.4 : 0.8);
+      gEdges.appendChild(l);
+    });
+    svg.appendChild(gEdges);
+
+    // draw nodes (sparse, subtle)
+    const gNodes = document.createElementNS(NS,'g');
+    nodes.forEach(n=>{
+      if(Math.random()>0.45) return;
+      const c=document.createElementNS(NS,'circle');
+      c.setAttribute('cx',n.x); c.setAttribute('cy',n.y);
+      c.setAttribute('r', 1.1);
+      c.setAttribute('fill','#33474f');
+      gNodes.appendChild(c);
+    });
+    svg.appendChild(gNodes);
+
+    // --- the highlighted route: a monotone-ish walk left->right across the grid ---
+    let ci = 0, cj = Math.floor(gy*0.62);
+    const path = [idx(ci,cj)];
+    while(ci < gx){
+      const r = Math.random();
+      if(r < 0.6){ ci++; }
+      else if(r < 0.8 && cj>0){ cj--; }
+      else if(cj<gy){ cj++; }
+      else { ci++; }
+      path.push(idx(Math.min(ci,gx), Math.min(Math.max(cj,0),gy)));
+    }
+    let d = '';
+    path.forEach((p,k)=>{ const n=nodes[p]; d += (k?'L':'M') + n.x.toFixed(1) + ' ' + n.y.toFixed(1) + ' '; });
+
+    const route = document.createElementNS(NS,'path');
+    route.setAttribute('d', d);
+    route.setAttribute('fill','none');
+    route.setAttribute('stroke','#7bd88f');
+    route.setAttribute('stroke-width','2.4');
+    route.setAttribute('stroke-linecap','round');
+    route.setAttribute('stroke-linejoin','round');
+    route.setAttribute('opacity','0.9');
+    route.setAttribute('filter','url(#glow)');
+    svg.appendChild(route);
+
+    // glow filter
+    const defs=document.createElementNS(NS,'defs');
+    defs.innerHTML = '<filter id="glow" x="-20%" y="-20%" width="140%" height="140%"><feGaussianBlur stdDeviation="3" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>';
+    svg.insertBefore(defs, svg.firstChild);
+
+    // endpoints (waypoint markers)
+    [path[0], path[path.length-1]].forEach(p=>{
+      const n=nodes[p];
+      const ring=document.createElementNS(NS,'circle');
+      ring.setAttribute('cx',n.x); ring.setAttribute('cy',n.y); ring.setAttribute('r',5.5);
+      ring.setAttribute('fill','none'); ring.setAttribute('stroke','#e8c07d'); ring.setAttribute('stroke-width','1.6');
+      svg.appendChild(ring);
+      const dot=document.createElementNS(NS,'circle');
+      dot.setAttribute('cx',n.x); dot.setAttribute('cy',n.y); dot.setAttribute('r',2.2);
+      dot.setAttribute('fill','#e8c07d');
+      svg.appendChild(dot);
+    });
+
+    // animate the route drawing itself
+    if(!reduce){
+      const len = route.getTotalLength();
+      route.style.strokeDasharray = len;
+      route.style.strokeDashoffset = len;
+      route.style.transition = 'stroke-dashoffset 2.6s cubic-bezier(.4,.05,.2,1)';
+      requestAnimationFrame(()=>{ requestAnimationFrame(()=>{ route.style.strokeDashoffset = '0'; }); });
+    }
+  }
+
+  build();
+  let t;
+  window.addEventListener('resize', ()=>{ clearTimeout(t); t=setTimeout(build,250); });
+})();
+</script>
+</body>
+</html>
