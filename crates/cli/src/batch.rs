@@ -20,31 +20,12 @@ use std::error::Error;
 use std::fmt::Write as _;
 use std::fs;
 use std::path::Path;
-use std::process::Command;
 
 use roughroute_core::{Graph, Profile, RouteOptions, Router};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-/// Free space that must remain after a download (beyond the estimated
-/// artifacts), so a build never runs the disk to the wire.
-const HEADROOM_FLOOR_BYTES: u64 = 1 << 30; // 1 GiB
-/// Assumed download size when the server sends no Content-Length.
-const UNKNOWN_PBF_ESTIMATE_BYTES: u64 = 5 << 30; // 5 GiB, deliberately harsh
-/// Hard safety ceiling on a single `.pbf`: regardless of disk headroom, a
-/// probed (or unknown) size above this aborts the whole run rather than
-/// downloading. This is a blunt guard against an accidentally huge region
-/// (a continent, a whole country the size of the US) landing in the
-/// manifest and eating an unattended run's disk or wall-clock budget; raise
-/// it deliberately if a legitimately larger region is ever added.
-///
-/// Briefly raised 2026-07-03 to 1.2 GB to admit Austria (probed at
-/// 803.1 MB) as a larger scaling test; reverted to 800 MB the same day after
-/// that build was OOM-killed on this dev VM's 5.8 GB RAM (docs/DECISIONS.md
-/// D18) — a *memory*, not disk, ceiling this constant was never meant to
-/// guard against. The disk headroom check below is independent of this
-/// value either way.
-const HARD_MAX_PBF_BYTES: u64 = 800_000_000; // 800 MB (decimal)
+use crate::net;
 
 /// The committed region manifest (`regions.toml`, D17).
 #[derive(Deserialize)]
@@ -129,6 +110,9 @@ pub fn cmd_batch(
     let tmp_dir = out_dir.join(".tmp");
     fs::create_dir_all(&tmp_dir)?;
 
+    // One timeout-configured agent for every download this run (net::agent).
+    let agent = net::agent();
+
     let existing = load_existing_index(&out_dir.join("index.json"));
 
     let mut index_entries: Vec<IndexRegion> = Vec::new();
@@ -157,7 +141,7 @@ pub fn cmd_batch(
             }
         }
 
-        match build_region(region, out_dir, &tmp_dir, release_url_base) {
+        match build_region(&agent, region, out_dir, &tmp_dir, release_url_base) {
             Ok(entry) => {
                 eprintln!(
                     "  ok: {} ({:.1} MB, {} nodes, {} edges, sha256 {}…)",
@@ -268,54 +252,21 @@ fn validate_manifest(manifest: &Manifest) -> Result<(), Box<dyn Error>> {
 /// The full per-region cycle. The `.pbf` is removed before this returns,
 /// success or failure.
 fn build_region(
+    agent: &ureq::Agent,
     region: &ManifestRegion,
     out_dir: &Path,
     tmp_dir: &Path,
     release_url_base: Option<&str>,
 ) -> Result<IndexRegion, RegionError> {
-    // 1a. Hard size ceiling — checked before anything else, and before the
-    //     headroom math (which would otherwise happily approve a technically
-    //     fitting but unattended-run-hostile multi-GB download). An unknown
-    //     size (HEAD gave no Content-Length) is treated as a failure of this
-    //     gate too: we refuse to download blind past a safety limit.
-    let content_length = probe_content_length(&region.pbf_url);
-    match content_length {
-        Some(len) if len > HARD_MAX_PBF_BYTES => {
-            return Err(RegionError::AbortRun(format!(
-                "{}: .pbf is {:.1} MB, over the {:.0} MB hard safety ceiling — refusing to \
-                 download; pick a smaller region or raise HARD_MAX_PBF_BYTES deliberately",
-                region.id,
-                len as f64 / 1_000_000.0,
-                HARD_MAX_PBF_BYTES as f64 / 1_000_000.0,
-            )));
-        }
-        Some(len) => eprintln!("  .pbf size: {:.1} MB (within the safety ceiling)", len as f64 / 1_000_000.0),
-        None => {
-            return Err(RegionError::AbortRun(format!(
-                "{}: could not determine .pbf size via HEAD request; refusing to download \
-                 without a size safety check",
-                region.id
-            )));
-        }
-    }
-
-    // 1b. Disk headroom gate — before the download, aborting the run rather
-    //     than risking a full disk (CLAUDE.md "Disk usage").
-    let need = estimated_need_bytes(content_length);
-    let avail = available_bytes(out_dir)
-        .map_err(|e| RegionError::AbortRun(format!("cannot determine free disk space: {e}")))?;
-    if avail < need {
-        return Err(RegionError::AbortRun(format!(
-            "insufficient disk for {}: {:.1} GiB free, {:.1} GiB needed (download + build + 1 GiB floor)",
-            region.id,
-            avail as f64 / (1 << 30) as f64,
-            need as f64 / (1 << 30) as f64,
-        )));
-    }
+    // 1. Shared pre-download safety gate (hard size ceiling + disk headroom).
+    //    A gate failure aborts the whole run rather than risking a full disk;
+    //    the .pbf lands next to the built graph, so headroom is checked on
+    //    out_dir. No byte is fetched here beyond a HEAD request.
+    net::gate_download(agent, &region.pbf_url, out_dir, &region.id).map_err(RegionError::AbortRun)?;
 
     // 2. Download to scratch.
     let pbf_path = tmp_dir.join(format!("{}.osm.pbf", region.id));
-    let downloaded = download(&region.pbf_url, &pbf_path);
+    let downloaded = net::download(agent, &region.pbf_url, &pbf_path).map_err(RegionError::Skip);
 
     // 3–4. Build + verify, with the .pbf removed afterwards no matter what.
     let result = downloaded.and_then(|_| {
@@ -407,52 +358,6 @@ fn sha256_hex(bytes: &[u8]) -> String {
     hex
 }
 
-/// HEAD the URL and read `Content-Length` (following redirects — Geofabrik's
-/// `-latest.osm.pbf` URLs 302 to a dated file, so a redirect-naive probe
-/// would see the tiny HTML redirect body's length instead of the real one).
-/// `ureq`'s default agent follows redirects for HEAD same as GET.
-fn probe_content_length(url: &str) -> Option<u64> {
-    ureq::head(url)
-        .call()
-        .ok()
-        .and_then(|resp| resp.header("content-length").and_then(|v| v.parse::<u64>().ok()))
-}
-
-/// `2 × content_length + 1 GiB` (D17): source + built graph + floor. A harsh
-/// default when the length is unknown.
-fn estimated_need_bytes(content_length: Option<u64>) -> u64 {
-    match content_length {
-        Some(len) => len.saturating_mul(2).saturating_add(HEADROOM_FLOOR_BYTES),
-        None => UNKNOWN_PBF_ESTIMATE_BYTES,
-    }
-}
-
-/// Free bytes on the filesystem holding `path`, via `df -P -B1` (POSIX output
-/// format; this is dev/CI tooling for Linux/macOS runners).
-fn available_bytes(path: &Path) -> Result<u64, Box<dyn Error>> {
-    let output = Command::new("df").arg("-P").arg("-B1").arg(path).output()?;
-    if !output.status.success() {
-        return Err(format!("df exited with {}", output.status).into());
-    }
-    parse_df_available(&String::from_utf8_lossy(&output.stdout))
-}
-
-/// Parse the "Available" column of `df -P` output (second line, 4th field).
-fn parse_df_available(df_output: &str) -> Result<u64, Box<dyn Error>> {
-    let line = df_output.lines().nth(1).ok_or("df output has no data line")?;
-    let field = line.split_whitespace().nth(3).ok_or("df line has no Available field")?;
-    Ok(field.parse::<u64>()?)
-}
-
-fn download(url: &str, to: &Path) -> Result<(), RegionError> {
-    let skip = |e: String| RegionError::Skip(format!("download failed: {e}"));
-    let response = ureq::get(url).call().map_err(|e| skip(e.to_string()))?;
-    let mut file = fs::File::create(to).map_err(|e| skip(e.to_string()))?;
-    let copied = std::io::copy(&mut response.into_reader(), &mut file)
-        .map_err(|e| skip(e.to_string()))?;
-    eprintln!("  downloaded {:.1} MB", copied as f64 / (1024.0 * 1024.0));
-    Ok(())
-}
 
 #[cfg(test)]
 mod tests {
@@ -639,31 +544,5 @@ mod tests {
             sha256_hex(b"abc"),
             "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
         );
-    }
-
-    #[test]
-    fn estimated_need_scales_with_known_length_and_is_harsh_when_unknown() {
-        let need = estimated_need_bytes(Some(300_000_000));
-        assert_eq!(need, 300_000_000 * 2 + HEADROOM_FLOOR_BYTES);
-        assert_eq!(estimated_need_bytes(None), UNKNOWN_PBF_ESTIMATE_BYTES);
-    }
-
-    #[test]
-    fn hard_max_pbf_ceiling_is_800mb() {
-        // Pin the constant so a casual edit doesn't silently loosen the
-        // safety gate. Briefly raised to 1.2 GB for an Austria attempt
-        // (D18), reverted the same day (2026-07-03) after that build was
-        // OOM-killed — a memory ceiling this disk-focused gate can't help
-        // with anyway.
-        assert_eq!(HARD_MAX_PBF_BYTES, 800_000_000);
-    }
-
-    #[test]
-    fn df_output_parses() {
-        let out = "Filesystem     1-blocks       Used  Available Capacity Mounted on\n\
-                   /dev/sda1    105089261568 46349357056 53355900928      47% /\n";
-        assert_eq!(parse_df_available(out).unwrap(), 53_355_900_928);
-        assert!(parse_df_available("").is_err());
-        assert!(parse_df_available("header only\n").is_err());
     }
 }

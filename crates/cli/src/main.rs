@@ -7,6 +7,7 @@
 
 mod batch;
 mod export;
+mod net;
 
 use std::error::Error;
 use std::fs;
@@ -138,35 +139,49 @@ fn cmd_build(
     out: PathBuf,
     profiles: &[CliProfile],
 ) -> Result<(), Box<dyn Error>> {
-    // Resolve the input: local path, or download to a temp file first.
-    let (pbf_path, temp_download) = match (pbf, pbf_url) {
-        (Some(path), _) => (path, None),
+    // Resolve the input: a local path is used directly; a URL is downloaded
+    // through the same safety gate `batch` uses (size probe, hard ceiling,
+    // disk headroom, timeouts) and deleted on every exit path.
+    match (pbf, pbf_url) {
+        (Some(path), _) => build_from_pbf(&path, &out, profiles),
         (None, Some(url)) => {
+            let agent = net::agent();
+            // The .pbf lands next to the graph output so the headroom check
+            // (on the output directory) covers the same filesystem both files
+            // use; a bare `--out name.graph` means the current directory.
+            let dest_dir = out.parent().filter(|p| !p.as_os_str().is_empty());
+            let dest_dir = dest_dir.unwrap_or_else(|| std::path::Path::new("."));
+            net::gate_download(&agent, &url, dest_dir, "download")?;
             eprintln!("downloading {url} …");
-            let path =
-                std::env::temp_dir().join(format!("roughroute-{}.osm.pbf", std::process::id()));
-            let response = ureq::get(&url).call()?;
-            let mut file = fs::File::create(&path)?;
-            std::io::copy(&mut response.into_reader(), &mut file)?;
-            (path.clone(), Some(path))
+            let pbf_path =
+                dest_dir.join(format!(".roughroute-download-{}.osm.pbf", std::process::id()));
+            net::download(&agent, &url, &pbf_path)?;
+            // Build, then remove the scratch .pbf whether the build succeeded
+            // or failed (no leaked download on error).
+            let result = build_from_pbf(&pbf_path, &out, profiles);
+            let _ = fs::remove_file(&pbf_path);
+            result
         }
         (None, None) => unreachable!("clap enforces --pbf or --pbf-url"),
-    };
+    }
+}
 
+/// Build a `.graph` from a local `.osm.pbf` and print build statistics.
+fn build_from_pbf(
+    pbf_path: &std::path::Path,
+    out: &std::path::Path,
+    profiles: &[CliProfile],
+) -> Result<(), Box<dyn Error>> {
     let keep_mask: u8 = profiles.iter().map(|&p| Profile::from(p).mask()).fold(0, |a, m| a | m);
 
-    let (mut ways, coords) = read_road_network(&pbf_path)?;
+    let (mut ways, coords) = read_road_network(pbf_path)?;
     // `--profiles` narrows the graph to ways usable by the selected profiles.
     for way in &mut ways {
         way.access &= keep_mask;
     }
     let (graph, stats) = build_graph(&ways, &coords)?;
     let bytes = graph.to_bytes();
-    fs::write(&out, &bytes)?;
-
-    if let Some(path) = temp_download {
-        let _ = fs::remove_file(path); // best-effort cleanup
-    }
+    fs::write(out, &bytes)?;
 
     let bb = graph.bbox();
     eprintln!(
