@@ -8,8 +8,12 @@
 //! - [`network`] — the pure graph-construction layer: an in-memory road
 //!   network (ways + node coordinates) in, a validated [`roughroute_core::Graph`]
 //!   out. All correctness-critical logic (junction dedup, determinism, edge
-//!   merging) lives here and is tested without any `.pbf` file.
-//! - [`pbf`] — the thin `osmpbf` front-end producing that in-memory form.
+//!   merging) lives here and is tested without any `.pbf` file. Since D23 the
+//!   single implementation consumes a compact representation
+//!   ([`CompactNetwork`]) so peak RAM stops scaling with per-way/per-node
+//!   heap allocations; the `(&[RawWay], &BTreeMap)` entry points are thin
+//!   adapters over it.
+//! - [`pbf`] — the thin `osmpbf` front-end producing that compact form.
 //! - [`tags`] — the `highway` tag → profile access mask table.
 
 #![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
@@ -19,7 +23,10 @@ pub mod network;
 pub mod pbf;
 pub mod tags;
 
-pub use network::{build_graph, build_graph_with_options, BuildStats, RawWay};
+pub use network::{
+    build_graph, build_graph_compact, build_graph_compact_with_options, build_graph_with_options,
+    BuildStats, CompactNetwork, RawWay,
+};
 pub use pbf::read_road_network;
 
 use roughroute_core::GraphError;

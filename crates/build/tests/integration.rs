@@ -238,8 +238,11 @@ fn cyprus_fixture_end_to_end() {
     if !path.exists() {
         panic!("fixture missing: {}", path.display());
     }
-    let (ways, coords) = roughroute_build::read_road_network(&path).unwrap();
-    let (graph, stats) = build_graph(&ways, &coords).unwrap();
+    // The compact network is cloned per build below: `build_graph_compact`
+    // consumes its input (D23 frees transients mid-build), and this test
+    // deliberately builds several variants from the same read.
+    let network = roughroute_build::read_road_network(&path).unwrap();
+    let (graph, stats) = roughroute_build::build_graph_compact(network.clone()).unwrap();
     assert!(graph.node_count() > 10_000, "Cyprus should be sizeable");
     eprintln!(
         "cyprus: {} nodes, {} edges, stats {stats:?}",
@@ -260,7 +263,7 @@ fn cyprus_fixture_end_to_end() {
 
     // Determinism on the real graph.
     let bytes = graph.to_bytes();
-    let (g2, _) = build_graph(&ways, &coords).unwrap();
+    let (g2, _) = roughroute_build::build_graph_compact(network.clone()).unwrap();
     assert_eq!(bytes, g2.to_bytes());
 
     // --- F10 heals the documented D14 case (M5) ---
@@ -322,7 +325,7 @@ fn cyprus_fixture_end_to_end() {
     // coordinates (so both graphs snap identically), the collapsed graph must
     // return point-for-point the same polyline as the uncollapsed topology.
     let (dense, _) =
-        roughroute_build::build_graph_with_options(&ways, &coords, false).unwrap();
+        roughroute_build::build_graph_compact_with_options(network, false).unwrap();
     let a = graph.node_latlon(graph.nearest_node(34.6841, 33.0379, 200.0).unwrap().0);
     let b = graph.node_latlon(graph.nearest_node(35.1739, 33.3643, 200.0).unwrap().0);
     for (from, to) in [(a, b), (b, a)] {

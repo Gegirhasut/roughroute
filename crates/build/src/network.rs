@@ -15,6 +15,15 @@
 //! ascending pre-collapse index (= ascending OSM id), chains are discovered
 //! and laid out in ascending scan order, and adjacency sorts by
 //! `(target, length_dm, geo_off)`.
+//!
+//! **Memory (D23).** There is exactly one copy of this algorithm —
+//! [`build_graph_compact_with_options`], operating on a [`CompactNetwork`]
+//! (flat way-ref array + sorted parallel id/coordinate arrays + the sorted
+//! merged edge list reused in place as CSR adjacency), with large transients
+//! freed as soon as the next stage no longer needs them. The original
+//! `(&[RawWay], &BTreeMap)` entry points are thin adapters into it, so peak
+//! RSS stops scaling with per-way/per-node heap allocations while the
+//! computed values — and therefore the output bytes — stay identical.
 
 use std::collections::BTreeMap;
 
@@ -65,6 +74,65 @@ pub struct BuildStats {
     pub loop_chains_dropped: u64,
 }
 
+/// The compact in-memory road network (`docs/DECISIONS.md` D23): the same
+/// information as the `(&[RawWay], &BTreeMap<i64, [f64; 2]>)` pair the
+/// original entry points take, in a dense representation — every way's refs
+/// in one flat array instead of one heap `Vec` per way, and node coordinates
+/// as sorted parallel arrays (binary-search lookup) instead of a `BTreeMap`,
+/// already quantized to the on-disk fixed-point form.
+///
+/// Invariant (upheld by both producers, not validated here): `node_ids` is
+/// sorted and unique, `node_coords` is parallel to it, and every listed node
+/// has a known coordinate.
+#[derive(Debug, Clone)]
+pub struct CompactNetwork {
+    /// All ways' node refs, concatenated.
+    pub(crate) way_refs: Vec<i64>,
+    /// Way `w` occupies `way_refs[way_starts[w]..way_starts[w + 1]]`.
+    pub(crate) way_starts: Vec<usize>,
+    /// Per-way profile access mask, parallel to the ways.
+    pub(crate) way_access: Vec<u8>,
+    /// Sorted, unique OSM node ids with known coordinates.
+    pub(crate) node_ids: Vec<i64>,
+    /// Fixed-point `[lat, lon]`, parallel to `node_ids`. Quantized with the
+    /// same [`geo::deg_to_fixed`] the map-based path applies, so lengths and
+    /// bytes downstream are identical (D23).
+    pub(crate) node_coords: Vec<[i32; 2]>,
+}
+
+impl CompactNetwork {
+    pub(crate) fn new() -> Self {
+        CompactNetwork {
+            way_refs: Vec::new(),
+            way_starts: vec![0],
+            way_access: Vec::new(),
+            node_ids: Vec::new(),
+            node_coords: Vec::new(),
+        }
+    }
+
+    /// Append one way. Ways with fewer than two refs are dropped here —
+    /// exactly the ways the build loop would skip anyway.
+    pub(crate) fn push_way(&mut self, refs: impl IntoIterator<Item = i64>, access: u8) {
+        let start = self.way_refs.len();
+        self.way_refs.extend(refs);
+        if self.way_refs.len() - start < 2 {
+            self.way_refs.truncate(start);
+            return;
+        }
+        self.way_starts.push(self.way_refs.len());
+        self.way_access.push(access);
+    }
+
+    /// Narrow every way's access mask to `keep` (the CLI's `--profiles`
+    /// filter). Ways masked to 0 are skipped by the build, same as before.
+    pub fn mask_access(&mut self, keep: u8) {
+        for access in &mut self.way_access {
+            *access &= keep;
+        }
+    }
+}
+
 /// Build a routable graph from accepted ways plus a node-id → `[lat, lon]`
 /// (degrees) coordinate map. Degree-2 chains are collapsed (D13); the
 /// returned graph is in format v2 with intermediate geometry (D12).
@@ -72,6 +140,9 @@ pub struct BuildStats {
 /// Only nodes that end up on at least one edge become graph nodes; ways with
 /// mask 0 or fewer than two resolvable refs contribute nothing. An empty
 /// network yields a valid empty graph (spec §10).
+///
+/// This is a thin adapter over [`build_graph_compact`] (D23) — kept as the
+/// convenient entry point for tests and synthetic fixtures.
 pub fn build_graph(
     ways: &[RawWay],
     coords: &BTreeMap<i64, [f64; 2]>,
@@ -88,29 +159,65 @@ pub fn build_graph_with_options(
     coords: &BTreeMap<i64, [f64; 2]>,
     collapse: bool,
 ) -> Result<(Graph, BuildStats), BuildError> {
-    let mut stats = BuildStats::default();
-
-    // ---- v1 pipeline -----------------------------------------------------
-
-    // 1. Resolve ways into segments over OSM ids: consecutive distinct-id
-    //    pairs whose both endpoints have coordinates.
-    let mut segments: Vec<(i64, i64, u8)> = Vec::new();
+    let mut net = CompactNetwork::new();
     for way in ways {
-        if way.access == 0 || way.node_ids.len() < 2 {
+        net.push_way(way.node_ids.iter().copied(), way.access);
+    }
+    // BTreeMap iteration is ascending by key: sorted + unique for free.
+    net.node_ids = coords.keys().copied().collect();
+    net.node_coords = coords
+        .values()
+        .map(|&[lat, lon]| [geo::deg_to_fixed(lat), geo::deg_to_fixed(lon)])
+        .collect();
+    build_graph_compact_with_options(net, collapse)
+}
+
+/// Build a routable graph from a [`CompactNetwork`], consuming it (large
+/// transients are freed the moment the next stage no longer needs them —
+/// D23). Semantics are identical to [`build_graph`]; this *is* the single
+/// implementation the adapters feed.
+pub fn build_graph_compact(net: CompactNetwork) -> Result<(Graph, BuildStats), BuildError> {
+    build_graph_compact_with_options(net, true)
+}
+
+/// [`build_graph_compact`] with the M4 collapse toggleable (see
+/// [`build_graph_with_options`]).
+pub fn build_graph_compact_with_options(
+    net: CompactNetwork,
+    collapse: bool,
+) -> Result<(Graph, BuildStats), BuildError> {
+    let mut stats = BuildStats::default();
+    let CompactNetwork { way_refs, way_starts, way_access, node_ids, node_coords } = net;
+    let way = |w: usize| &way_refs[way_starts[w]..way_starts[w + 1]];
+
+    // ---- v1 pipeline (compact form, D23) ----------------------------------
+
+    // 1. First scan over the ways: mark which known-coordinate nodes are an
+    //    endpoint of at least one valid segment (consecutive distinct-id pair
+    //    with both coordinates known), and count segments/stats. This
+    //    replaces materializing the segment list — step 3 re-scans the ways
+    //    over the same predicate, so the derived values are identical.
+    let mut is_endpoint = vec![false; node_ids.len()];
+    let mut segment_count: usize = 0;
+    for (w, &access) in way_access.iter().enumerate() {
+        if access == 0 || way(w).len() < 2 {
             continue;
         }
         let mut contributed = false;
-        for pair in way.node_ids.windows(2) {
+        for pair in way(w).windows(2) {
             let (a, b) = (pair[0], pair[1]);
             if a == b {
                 continue; // repeated ref, an OSM data glitch (D1)
             }
-            if !coords.contains_key(&a) || !coords.contains_key(&b) {
-                stats.segments_dropped_missing_node += 1;
-                continue;
+            match (node_ids.binary_search(&a), node_ids.binary_search(&b)) {
+                (Ok(pa), Ok(pb)) => {
+                    is_endpoint[pa] = true;
+                    is_endpoint[pb] = true;
+                    segment_count += 1;
+                    contributed = true;
+                }
+                _ => stats.segments_dropped_missing_node += 1,
             }
-            segments.push((a, b, way.access));
-            contributed = true;
         }
         if contributed {
             stats.ways_used += 1;
@@ -118,31 +225,24 @@ pub fn build_graph_with_options(
     }
 
     // 2. Node universe = ids appearing in at least one segment, indexed by
-    //    ascending OSM id (D3: reproducible regardless of input order).
-    let mut ids: Vec<i64> = segments.iter().flat_map(|&(a, b, _)| [a, b]).collect();
-    ids.sort_unstable();
-    ids.dedup();
-    if ids.len() > (u32::MAX - 1) as usize {
+    //    ascending OSM id (D3: node_ids is sorted, so the filtered order is
+    //    the ascending-id rank order the original pipeline computed). The
+    //    full known-node table is freed before edges are built (D23).
+    let kept_nodes = is_endpoint.iter().filter(|&&e| e).count();
+    if kept_nodes > (u32::MAX - 1) as usize {
         return Err(BuildError::TooLarge);
     }
-    let index_of = |id: i64| -> u32 {
-        // ids is sorted and contains every segment endpoint by construction.
-        match ids.binary_search(&id) {
-            Ok(i) => i as u32,
-            Err(_) => unreachable!("segment endpoint missing from id table"),
+    let mut ids: Vec<i64> = Vec::with_capacity(kept_nodes);
+    let mut nodes: Vec<[i32; 2]> = Vec::with_capacity(kept_nodes);
+    for (i, &e) in is_endpoint.iter().enumerate() {
+        if e {
+            ids.push(node_ids[i]);
+            nodes.push(node_coords[i]);
         }
-    };
-
-    // Coordinates are quantized to the on-disk fixed-point representation
-    // *before* measuring lengths, so lengths always agree with the geometry a
-    // reader of the .graph file sees.
-    let nodes: Vec<[i32; 2]> = ids
-        .iter()
-        .map(|id| {
-            let [lat, lon] = coords[id];
-            [geo::deg_to_fixed(lat), geo::deg_to_fixed(lon)]
-        })
-        .collect();
+    }
+    drop(is_endpoint);
+    drop(node_ids);
+    drop(node_coords);
 
     // Reject a region whose longitude span exceeds 180°: it either crosses the
     // antimeridian or is more than half the globe wide. The snapping
@@ -160,61 +260,105 @@ pub fn build_graph_with_options(
     }
 
     // 3. Directed edges, both directions per segment (v1 ignores `oneway`).
-    let mut directed: Vec<(u32, u32, u32, u8)> = Vec::with_capacity(segments.len() * 2);
-    for &(a, b, access) in &segments {
-        let (ai, bi) = (index_of(a), index_of(b));
-        let [alat, alon] = nodes[ai as usize];
-        let [blat, blon] = nodes[bi as usize];
-        let m = geo::haversine_m(
-            geo::fixed_to_deg(alat),
-            geo::fixed_to_deg(alon),
-            geo::fixed_to_deg(blat),
-            geo::fixed_to_deg(blon),
-        );
-        // Clamp to ≥ 1 dm so no edge is free to traverse (D5).
-        let length_dm = ((m * 10.0).round().min(f64::from(u32::MAX)) as u32).max(1);
-        directed.push((ai, bi, length_dm, access));
-        directed.push((bi, ai, length_dm, access));
-    }
-
-    // 4. Deterministic order, then merge duplicates: same (source, target)
-    //    from overlapping ways collapses to one edge with OR-ed access and
-    //    the minimum length (D1). Sorting by length puts the minimum first.
-    directed.sort_unstable();
-    let mut merged: Vec<(u32, u32, u32, u8)> = Vec::with_capacity(directed.len());
-    for (s, t, len, acc) in directed {
-        match merged.last_mut() {
-            Some((ls, lt, _, lacc)) if *ls == s && *lt == t => {
-                *lacc |= acc;
-                stats.duplicate_edges_merged += 1;
+    //    Same scan and predicate as step 1; a pair is valid there iff both
+    //    endpoints are in `ids` here, so the emitted segment sequence is
+    //    exactly the one the original pipeline materialized (drops were
+    //    already counted in step 1).
+    let mut directed: Vec<(u32, u32, u32, u8)> = Vec::with_capacity(segment_count * 2);
+    for (w, &access) in way_access.iter().enumerate() {
+        if access == 0 || way(w).len() < 2 {
+            continue;
+        }
+        for pair in way(w).windows(2) {
+            let (a, b) = (pair[0], pair[1]);
+            if a == b {
+                continue;
             }
-            _ => merged.push((s, t, len, acc)),
+            let (Ok(ai), Ok(bi)) = (ids.binary_search(&a), ids.binary_search(&b)) else {
+                continue;
+            };
+            let (ai, bi) = (ai as u32, bi as u32);
+            let [alat, alon] = nodes[ai as usize];
+            let [blat, blon] = nodes[bi as usize];
+            // Coordinates were quantized to the on-disk fixed-point
+            // representation *before* measuring lengths, so lengths always
+            // agree with the geometry a reader of the .graph file sees.
+            let m = geo::haversine_m(
+                geo::fixed_to_deg(alat),
+                geo::fixed_to_deg(alon),
+                geo::fixed_to_deg(blat),
+                geo::fixed_to_deg(blon),
+            );
+            // Clamp to ≥ 1 dm so no edge is free to traverse (D5).
+            let length_dm = ((m * 10.0).round().min(f64::from(u32::MAX)) as u32).max(1);
+            directed.push((ai, bi, length_dm, access));
+            directed.push((bi, ai, length_dm, access));
         }
     }
     stats.nodes_before_collapse = ids.len() as u64;
+    // The ways and the id table are no longer needed: only index-based data
+    // from here on (D23 consume-and-free).
+    drop(way_refs);
+    drop(way_starts);
+    drop(way_access);
+    drop(ids);
+
+    // 4. Deterministic order, then merge duplicates in place: same (source,
+    //    target) from overlapping ways collapses to one edge with OR-ed
+    //    access and the minimum length (D1). Sorting by length puts the
+    //    minimum first. In-place compaction replaces the second full-size
+    //    `merged` allocation the original pipeline made (D23).
+    directed.sort_unstable();
+    let mut write = 0usize;
+    for read in 0..directed.len() {
+        let (s, t, len, acc) = directed[read];
+        if write > 0 {
+            let (ls, lt, _, lacc) = &mut directed[write - 1];
+            if *ls == s && *lt == t {
+                *lacc |= acc;
+                stats.duplicate_edges_merged += 1;
+                continue;
+            }
+        }
+        directed[write] = (s, t, len, acc);
+        write += 1;
+    }
+    directed.truncate(write);
+    let merged = directed;
     stats.edges_before_collapse = merged.len() as u64;
 
     // ---- M4 degree-2 collapse (D13) --------------------------------------
 
-    // Adjacency over the merged edges: per node, (target, length_dm, access),
-    // sorted by construction (merged is sorted by (source, target)).
+    // Adjacency over the merged edges — the sorted merged list itself is the
+    // CSR payload (D23): node `i`'s edges are the contiguous run
+    // `merged[adj_off[i]..adj_off[i + 1]]`, holding `(source, target,
+    // length_dm, access)` tuples in exactly the order the per-node Vecs used
+    // to (merged is sorted by (source, target)).
     let n = nodes.len();
-    let mut adj: Vec<Vec<(u32, u32, u8)>> = vec![Vec::new(); n];
-    for &(s, t, len, acc) in &merged {
-        adj[s as usize].push((t, len, acc));
+    if merged.len() > u32::MAX as usize {
+        return Err(BuildError::TooLarge);
     }
+    let mut adj_off = vec![0u32; n + 1];
+    for &(s, _, _, _) in &merged {
+        adj_off[s as usize + 1] += 1;
+    }
+    for i in 1..adj_off.len() {
+        adj_off[i] += adj_off[i - 1];
+    }
+    let adj =
+        |i: usize| -> &[(u32, u32, u32, u8)] { &merged[adj_off[i] as usize..adj_off[i + 1] as usize] };
 
     // Interior (collapsible) node: exactly two edges, to distinct neighbors,
     // with equal access. Everything else stays a real node.
     let mut kept: Vec<bool> = (0..n)
         .map(|i| {
-            let e = &adj[i];
+            let e = adj(i);
             !(collapse
                 && e.len() == 2
-                && e[0].0 != e[1].0
-                && e[0].0 != i as u32
-                && e[1].0 != i as u32
-                && e[0].2 == e[1].2)
+                && e[0].1 != e[1].1
+                && e[0].1 != i as u32
+                && e[1].1 != i as u32
+                && e[0].3 == e[1].3)
         })
         .collect();
 
@@ -260,8 +404,8 @@ pub fn build_graph_with_options(
                 );
                 chains.push(done);
             }
-            let (n1, l1, _) = adj[cur as usize][0];
-            let (n2, l2, _) = adj[cur as usize][1];
+            let (_, n1, l1, _) = adj(cur as usize)[0];
+            let (_, n2, l2, _) = adj(cur as usize)[1];
             let (next, step) = if n1 == prev { (n2, l2) } else { (n1, l1) };
             chain.length_dm += u64::from(step);
             if kept[next as usize] {
@@ -297,7 +441,7 @@ pub fn build_graph_with_options(
         if !kept[a as usize] {
             continue;
         }
-        for &(t, len, acc) in &adj[a as usize] {
+        for &(_, t, len, acc) in adj(a as usize) {
             if !kept[t as usize] && !consumed[t as usize] {
                 walk(a, t, len, acc, &mut kept, &mut consumed, &mut chains, &mut stats);
             }
@@ -312,14 +456,14 @@ pub fn build_graph_with_options(
             continue;
         }
         kept[start as usize] = true;
-        let (n1, l1, acc) = adj[start as usize][0];
-        let n2 = adj[start as usize][1].0;
+        let (_, n1, l1, acc) = adj(start as usize)[0];
+        let (_, n2, l2, acc2) = adj(start as usize)[1];
         kept[n1.min(n2) as usize] = true;
         // Walk the long way around (via the *other* neighbor when the lowest
         // is now kept and adjacent — its direct edge comes from the pass
         // below). Both of start's edges are tried; kept/consumed guards keep
         // this correct in every ring shape.
-        for &(t, len, a2) in &[(n1, l1, acc), adj[start as usize][1]] {
+        for &(t, len, a2) in &[(n1, l1, acc), (n2, l2, acc2)] {
             if !kept[t as usize] && !consumed[t as usize] {
                 walk(start, t, len, a2, &mut kept, &mut consumed, &mut chains, &mut stats);
             }
@@ -334,6 +478,13 @@ pub fn build_graph_with_options(
             chains.push(Chain { a: s, b: t, length_dm: u64::from(len), access: acc, interior: Vec::new() });
         }
     }
+
+    // The chains now carry everything the emit stage needs: free the merged
+    // edge list (the largest remaining transient) before the geometry pool
+    // and the post-collapse edge list are allocated (D23).
+    drop(merged);
+    drop(adj_off);
+    drop(consumed);
 
     // ---- Renumber, lay out geometry, emit CSR ----------------------------
 
@@ -645,6 +796,54 @@ mod tests {
         assert_eq!(g.node_count(), 0);
         assert_eq!(g.edge_count(), 0);
         assert_eq!(stats, BuildStats::default());
+    }
+
+    #[test]
+    fn compact_push_way_drops_sub_two_ref_ways_and_masking_narrows() {
+        let mut net = CompactNetwork::new();
+        net.push_way([10i64], ACCESS_ALL); // dropped: < 2 refs
+        net.push_way([10i64, 20], ACCESS_ALL);
+        net.push_way(std::iter::empty(), ACCESS_CAR); // dropped: empty
+        net.push_way([20i64, 30], ACCESS_ALL);
+        assert_eq!(net.way_access.len(), 2);
+        assert_eq!(net.way_starts, vec![0, 2, 4]);
+        assert_eq!(net.way_refs, vec![10, 20, 20, 30]);
+        net.mask_access(ACCESS_CAR);
+        assert_eq!(net.way_access, vec![ACCESS_CAR, ACCESS_CAR]);
+    }
+
+    #[test]
+    fn compact_direct_and_adapter_paths_build_identical_bytes() {
+        // The D23 safety spine at unit level: a hand-assembled CompactNetwork
+        // (as the pbf front-end would produce — sorted quantized node table,
+        // flat refs) must yield byte-identical output to the map-based
+        // adapter for the same network.
+        let ways = vec![
+            RawWay { node_ids: vec![10, 20, 30, 40], access: ACCESS_ALL },
+            RawWay { node_ids: vec![30, 50], access: ACCESS_CAR },
+        ];
+        let coords = coords(&[
+            (10, 35.000, 33.000),
+            (20, 35.000, 33.010),
+            (30, 35.000, 33.020),
+            (40, 35.000, 33.030),
+            (50, 34.990, 33.020),
+        ]);
+        let (via_adapter, stats_a) = build_graph(&ways, &coords).unwrap();
+
+        let mut net = CompactNetwork::new();
+        for w in &ways {
+            net.push_way(w.node_ids.iter().copied(), w.access);
+        }
+        net.node_ids = coords.keys().copied().collect();
+        net.node_coords = coords
+            .values()
+            .map(|&[lat, lon]| [geo::deg_to_fixed(lat), geo::deg_to_fixed(lon)])
+            .collect();
+        let (direct, stats_d) = build_graph_compact(net).unwrap();
+
+        assert_eq!(via_adapter.to_bytes(), direct.to_bytes());
+        assert_eq!(stats_a, stats_d);
     }
 
     #[test]

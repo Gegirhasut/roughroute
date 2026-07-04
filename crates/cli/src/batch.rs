@@ -373,13 +373,10 @@ fn build_region(
 
     // 3–4. Build + verify, with the .pbf removed afterwards no matter what.
     let result = downloaded.and_then(|_| {
-        let (mut ways, coords) = roughroute_build::read_road_network(&pbf_path)
+        let mut network = roughroute_build::read_road_network(&pbf_path)
             .map_err(|e| RegionError::Skip(format!("pbf read failed: {e}")))?;
-        let keep = Profile::Car.mask() | Profile::Foot.mask();
-        for way in &mut ways {
-            way.access &= keep;
-        }
-        let (graph, _) = roughroute_build::build_graph(&ways, &coords)
+        network.mask_access(Profile::Car.mask() | Profile::Foot.mask());
+        let (graph, _) = roughroute_build::build_graph_compact(network)
             .map_err(|e| RegionError::Skip(format!("graph build failed: {e}")))?;
         let file = format!("{}.graph", region.id);
         let graph_path = out_dir.join(&file);

@@ -783,6 +783,164 @@ reverted it on 2026-07-03; this D22 re-raise (2026-07-04) is justified by the
 runner's headroom, not the VM's. If Austria OOMs the runner too, the honest
 follow-up is to drop it again and revisit only with a streaming build.
 
+## D23. Streaming / low-memory build: break peak-RAM's linear scaling (Tier 1 implemented 2026-07-04)
+
+**Problem.** `build` holds the entire pre-collapse road network in RAM at once,
+so peak RSS scales with the *raw* OSM size, not the (much smaller) final graph.
+D21's measurement made the wall concrete: Austria's 803 MB `.pbf` builds at
+~6.28 GiB peak (≈ 8 GB RAM per GB of pbf for a dense European network). That
+caps the ~16 GB CI runner at roughly a 1.3 GB `.pbf`; Germany (4.5 GB), France,
+Italy, all-Russia (3.8 GB) would OOM. The fix is to stop holding everything at
+once, without changing what gets built.
+
+**Non-negotiable invariant: byte-identical output.** A `.graph` built by the
+streaming builder must have the *same sha256* as one built by today's in-memory
+builder for the same `.pbf`. This is the whole safety story — the change is
+**how** the graph is assembled, never **what** it contains. Node indexing
+(ascending OSM id rank, D3), degree-2 collapse (D13), edge dedup (D1),
+geometry pool layout and delta-compression (D19) all stay bit-for-bit. Every
+change below is a pure *representation* change over the identical computed
+values in the identical order; correctness is argued per change, then proven by
+sha256 regression on real regions.
+
+**Where the memory goes (measured/estimated offenders, all live simultaneously
+near the pass boundary):**
+- `coords: BTreeMap<i64,[f64;2]>` + `needed: BTreeSet<i64>` (pbf front-end) —
+  BTreeMap/Set are ~3× less dense than a sorted array (pointer-linked partial-
+  fill nodes), and `[f64;2]` is 2× the `[i32;2]` fixed-point the build
+  quantizes to anyway.
+- `ways: Vec<RawWay>` — one heap `Vec<i64>` **per way** (millions of small
+  allocations) holding every way's full ref list.
+- `segments`, `directed` (2× segments), `merged` — several near-duplicate
+  copies of the edge set as padded i64/u32 tuples.
+- `adj: Vec<Vec<(u32,u32,u8)>>` — one heap `Vec` **per pre-collapse node**
+  (Cyprus 1.8 M, Austria ~15 M tiny Vecs): allocator header + min-alloc
+  overhead alone rivals the payload.
+
+The collapsed graph these produce is 6–7× smaller in nodes (D12); the blowup is
+entirely in these transients.
+
+**Architecture: one algorithm, two front doors.** The pure collapse/emit logic
+is refactored to run over a *compact internal representation* (sorted coord
+arrays + CSR adjacency), and there is exactly one copy of it. Two adapters feed
+it:
+- `build_graph(&[RawWay], &BTreeMap<i64,[f64;2]>)` keeps its current signature
+  as a thin adapter (sorts the map into arrays, streams segments from the
+  ways) — the whole D8 synthetic-fixture test suite is untouched.
+- The `.pbf` path feeds the compact core directly from its passes, never
+  materializing a `BTreeMap` or a per-way `Vec` list.
+
+Because both doors call the *same* core, "streaming produces identical bytes"
+reduces to "the core is unchanged" plus "the adapters preserve values" — not a
+re-test of the algorithm.
+
+**Tier 1 — compact in-RAM representation (high confidence, attacks every
+offender above; implement + measure first):**
+1. **Dense sorted coord store** replaces the `BTreeMap`/`BTreeSet`: parallel
+   `ids: Vec<i64>` (sorted, deduped) + `coords: Vec<[i32;2]>`, lookup by binary
+   search. Coordinates are quantized to fixed-point `[i32;2]` *at read time* via
+   the same `geo::deg_to_fixed(node.lat())`. **Byte-identity:** the build
+   already quantizes with `deg_to_fixed` before measuring, and feeds
+   `fixed_to_deg(deg_to_fixed(x))` into haversine — quantizing at read applies
+   the identical function to the identical f64 input, so the round-trip and
+   every downstream length are unchanged. ~3× denser than the map, ×2 again from
+   `f64→i32`.
+2. **CSR adjacency** replaces `Vec<Vec<…>>`: offsets `Vec<u32>` + one flat
+   `Vec<(u32,u32,u8)>`, built from the already-sorted `merged` list. The
+   collapse's `adj[cur][0]`/`[1]` become `flat[off[cur]]`/`[off[cur]+1]` —
+   identical values in identical order. `kept`/`consumed` become bit-vectors.
+   **Byte-identity:** same data, same order; kills the millions-of-tiny-Vecs
+   overhead.
+3. **Consume-and-free discipline:** drop `ways` after segments are derived,
+   `segments` after `directed`, do the `directed→merged` dedup in place, so the
+   near-duplicate copies never coexist.
+
+Expected: cut peak from ~8×pbf toward ~3×pbf — enough for Austria to build with
+comfortable headroom and likely for the ~2 GB-class extracts, but not yet a
+guarantee for Germany/France at 4.5 GB.
+
+**Tier 2 — spill the largest transient to disk (only if Tier-1 measurement
+shows it's needed to fit the multi-GB extracts):** external merge-sort the
+directed-edge list. Stream directed edges to temp files in the batch scratch
+dir in sorted chunks, k-way merge back while applying the D1 dedup-merge, feed
+the merged stream straight into CSR construction — so the full `directed`/
+`merged` arrays never live on the heap at once. Temp files are cleaned on every
+exit path including failure, reusing the existing per-region disk hygiene. This
+is strictly more code and risk, hence gated behind Tier-1 numbers. **Byte-
+identity:** the external sort yields the identical total order
+(`sort_unstable` is by the full tuple) and the identical dedup result; only the
+sort's *location* (disk vs heap) changes.
+
+**Explicitly NOT changed:** the offline `core`, the routing runtime, the
+`.graph` format (still v3), the JSON/WASM/FFI contracts, the collapse
+algorithm, determinism. This is a `build`/CLI-only change.
+
+**Verification (the proof it's safe):**
+- **sha256 regression:** for every locally-buildable region (cyprus, malta,
+  andorra, slovenia, luxembourg, latvia, …) build with the streaming builder and
+  assert the `.graph` sha256 equals the current in-memory builder's output for
+  the same `.pbf` — same bytes ⇒ routes provably unchanged.
+- Golden/determinism tests and the way-order-shuffle stability test stay green.
+- Report peak RSS before/after for a mid-size region (Slovenia or Latvia),
+  measured locally (debug); note CI (release) differs.
+- Once merged and verified, a big region gets added to `regions.toml` in a
+  *separate* task and CI-dispatched to confirm it builds within runner RAM.
+
+### D23 results (Tier 1, measured 2026-07-04)
+
+Tier 1 implemented as designed: `CompactNetwork` (flat way-ref array +
+sorted parallel id/coordinate arrays, quantized at read), the sorted merged
+edge list reused **in place** as CSR adjacency (zero extra allocation —
+`merged[adj_off[i]..adj_off[i+1]]` replaces one heap `Vec` per node),
+in-place duplicate-edge merge (no second full-size list), and explicit
+consume-and-free between stages. One copy of the collapse/emit algorithm
+(`build_graph_compact_with_options`); `build_graph(&[RawWay], &BTreeMap)`
+is a thin adapter over it, so the entire synthetic test suite exercises the
+same core. Tier 2 (external-sort disk spill) **not implemented** — see the
+decision below.
+
+**Byte-identity: proven on all 10 locally-buildable regions.** Each region's
+`.pbf` was downloaded once and built with both the pre-change builder and
+Tier 1 (same machine/toolchain, debug): **sha256 identical in 10/10 cases**
+(andorra, malta, montenegro, cyprus, luxembourg, iceland, moldova, estonia,
+latvia, slovenia). Same bytes ⇒ node indexing, collapse, geometry pool,
+lengths, routes — all provably unchanged.
+
+**Peak RSS (debug, dev VM, same `.pbf` before/after):**
+
+| region | `.pbf` | before | Tier 1 | factor |
+|---|---|---|---|---|
+| Slovenia | 296 MiB | 1697 MiB | 389 MiB | **4.4×** |
+| Latvia | 133 MiB | 989 MiB | 280 MiB | **3.5×** |
+| Moldova | 96 MiB | 817 MiB | 214 MiB | 3.8× |
+| Estonia | 116 MiB | 738 MiB | 202 MiB | 3.7× |
+| Cyprus | 35 MiB | 513 MiB | 134 MiB | 3.8× |
+| Montenegro | 33 MiB | 451 MiB | 103 MiB | 4.4× |
+| Iceland | 62 MiB | 378 MiB | 97 MiB | 3.9× |
+| Luxembourg | 45 MiB | 275 MiB | 79 MiB | 3.5× |
+| Malta | 9 MiB | 66 MiB | 25 MiB | 2.6× |
+| Andorra | 4 MiB | 46 MiB | 21 MiB | 2.2× |
+
+Mid-size regions (the ones where transients dominate over fixed overhead):
+consistently **3.5–4.4× lower peak**, and peak-per-pbf-byte drops from
+~5.7× (Slovenia, debug) to ~1.3×.
+
+**Projected runner ceiling.** Austria (803 MB pbf) measured 6.28 GiB peak on
+the ~15.6 GB CI runner (release, pre-D23 builder) ≈ 7.8 GiB per GB of pbf.
+Applying the measured 3.5–4.4× reduction ⇒ **≈ 1.8–2.2 GiB per GB of pbf**,
+so with ~14 GB usable the runner should now clear roughly a **6–7 GB
+`.pbf`** — Germany (4.5 GB, projected ≈ 8–10 GiB peak), France, and
+all-Russia (3.8 GB) all land inside that with real headroom. Caveats: this
+extrapolates debug-measured factors to release and Slovenia-class road
+density to Germany-class; the first big-region CI build (its peak-RSS log
+line, D21) is the validation point.
+
+**Tier 2 decision: deferred, not needed on current evidence.** The projection
+puts the Germany/France class comfortably within the runner; the external-
+sort spill adds real complexity (temp-file lifecycle, k-way merge) for a
+class of extract (10 GB+, near-planet) that is out of scope. Revisit only if
+a measured big-region build contradicts the projection.
+
 ## Known limitations (deliberate v1 scope)
 
 These are known and out of scope for v1 — documented so they're a choice, not
@@ -817,12 +975,14 @@ a surprise. Each notes the real fix if it ever becomes necessary.
   is gone. Unreachable at target scale (it needs a multi-GB in-memory graph);
   no further work planned.
 
-- **`batch` builds the whole graph in memory (no streaming, no RAM gate)**:
-  peak RSS scales with region size, so a large extract can be OOM-killed —
-  locally on a small VM (D18) and even on a ~16 GB CI runner (D20) for a
-  multi-GB `.pbf`. `batch` gates disk but not memory, though it now *measures*
-  and logs peak RSS per region (D21) so headroom is visible before adding a
-  bigger region. The real fix is a **streaming build** that never holds the
-  full node/edge/geometry set at once; deferred. Until then, keep
-  `regions.toml` to region-sized entries (a manifest may list many regions —
-  each is built and freed in turn — but no single continent/planet extract).
+- **`batch` has no RAM gate (and peak RAM still grows with region size,
+  just far more slowly since D23)**: the Tier-1 compact build cut peak RSS
+  3.5–4.4× (≈ 2 GiB per GB of `.pbf` projected in release), which is
+  projected to put Germany/France-class extracts within the ~16 GB CI
+  runner — but the peak still *scales*, there is still no memory gate (only
+  disk gates), and a small dev VM can still be OOM-killed by a large enough
+  region. Peak RSS is measured and logged per region (D21) so headroom
+  stays visible. If a measured big-region build contradicts the D23
+  projection, the next lever is Tier 2 (external-sort disk spill of the
+  directed-edge list, designed in D23, not implemented). Planet-scale
+  extracts remain out of scope.

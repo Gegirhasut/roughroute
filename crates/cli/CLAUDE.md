@@ -61,17 +61,21 @@ url/bytes/sha256/nodes/edges/bbox/format_version). Publishing is manual/CI
 via `gh release create` (see README); no credentials here.
 
 **No RAM gate exists** — only the disk checks above. Austria (803.1 MB pbf)
-OOM-killed graph construction on the 5.8 GB-RAM dev VM (D18): the ceiling was
-raised to 1.2 GB then reverted to 800 MB when that attempt failed. It's now
-re-raised to 1.2 GB (D22) to retry Austria **on the ~16 GB CI runner only**,
-as a measured RAM-limit probe — never build Austria locally. If a future
-region needs more than the current ceiling admits, check available memory
-first, not just disk. To make that concrete, `batch` now **measures peak
-RSS per region** (`mem.rs`, D21) and prints it in each region's `ok:` log
-line, plus total system RAM once at the start — read those to judge headroom
-before adding a bigger region. Measurement only: it's `/proc`-based
-(`VmHWM`, reset via `clear_refs` between regions), Linux-only, off the core,
-and changes no build result.
+once OOM-killed graph construction on the 5.8 GB-RAM dev VM (D18), was
+re-admitted at a 1.2 GB ceiling (D22) as a CI RAM-limit probe, and measured
+**6.28 GiB peak** on the ~16 GB runner with the pre-D23 builder. The D23
+compact build then cut peak RSS **3.5–4.4×** (byte-identical output, proven
+by sha256 on all 10 locally-buildable regions), projecting ≈ 2 GiB RAM per
+GB of pbf in release — country-scale extracts are no longer RAM-bound; the
+1.2 GB *size* ceiling is now the binding gate and gets raised deliberately
+when a bigger region is added. `batch` still **measures peak RSS per
+region** (`mem.rs`, D21) and prints it in each region's `ok:` log line,
+plus total system RAM once at the start — read those to validate headroom
+(the first big-region build is D23's projection check). Measurement only:
+`/proc`-based (`VmHWM`, reset via `clear_refs` between regions),
+Linux-only, off the core, changes no build result. Still never build
+Austria-class regions locally — 4.4× lower peak on a 5.8 GB VM is thinner
+margin than CI's.
 
 Seeded regions: cyprus, malta, andorra (tiny), slovenia (mid-size scaling
 test, 309.6 MB pbf — the largest region built in this environment). See
@@ -90,8 +94,9 @@ is never written to the output dir at all, so every `.graph` file present
 after the run is by construction one this run actually built — no
 before/after hash diff needed to tell "new" from "carried forward." Don't
 move batch logic into YAML. `batch` logs free disk before/after each region
-so the runner's download→delete cycle is visible. Peak build RAM is
-unbounded (no streaming) — a multi-GB extract can OOM even the runner.
+so the runner's download→delete cycle is visible. Peak build RAM scales
+with region size (gently since D23, ≈ 2 GiB/GB of pbf projected) and is
+ungated — read the per-region peak-RSS log before adding bigger regions.
 
 ## Constraints
 - Route output goes to stdout (pipeable, per spec examples); diagnostics and

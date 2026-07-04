@@ -15,7 +15,7 @@ use std::fs;
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand, ValueEnum};
-use roughroute_build::{build_graph, read_road_network};
+use roughroute_build::{build_graph_compact, read_road_network};
 use roughroute_core::{Graph, Profile, RouteOptions, Router};
 
 #[derive(Parser)]
@@ -183,12 +183,10 @@ fn build_from_pbf(
 ) -> Result<(), Box<dyn Error>> {
     let keep_mask: u8 = profiles.iter().map(|&p| Profile::from(p).mask()).fold(0, |a, m| a | m);
 
-    let (mut ways, coords) = read_road_network(pbf_path)?;
+    let mut network = read_road_network(pbf_path)?;
     // `--profiles` narrows the graph to ways usable by the selected profiles.
-    for way in &mut ways {
-        way.access &= keep_mask;
-    }
-    let (graph, stats) = build_graph(&ways, &coords)?;
+    network.mask_access(keep_mask);
+    let (graph, stats) = build_graph_compact(network)?;
     let bytes = graph.to_bytes();
     fs::write(out, &bytes)?;
 

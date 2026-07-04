@@ -90,12 +90,15 @@ build scratch adds up. Rules:
   rebuilt only if new, its file is missing, its hash mismatches, or the
   format version changed — never on every run. `--force` overrides.
 - The batch tool's disk gates (headroom + `.pbf` size ceiling) have **no RAM
-  equivalent** — a large region can still be OOM-killed on a
-  memory-constrained machine even after the disk checks pass (hit this
-  building Austria on a 5.8 GB-RAM dev VM; D18). Known gap, not fixed —
-  but `batch` now **measures and logs peak RSS per region** (D21, `mem.rs`,
-  `/proc`-based, Linux-only, off the core) so the headroom is visible before
-  attempting a bigger region.
+  equivalent**, but since D23 the build is memory-compact: peak RSS cut
+  3.5–4.4× with **byte-identical `.graph` output** (one algorithm over a
+  `CompactNetwork`; sha256-proven on all 10 locally-buildable regions), so
+  country-scale extracts are projected to fit the CI runner (≈ 2 GiB RAM
+  per GB of pbf, release). `batch` **measures and logs peak RSS per
+  region** (D21, `mem.rs`, `/proc`-based, Linux-only, off the core) —
+  validate the projection there before/when adding a big region. A small
+  dev VM can still be OOM-killed by a large enough region (Austria's D18
+  OOM predates D23; don't re-test it locally).
 - Region graphs are built/published by CI (M8/D20):
   `.github/workflows/build-regions.yml` runs `roughroute batch --trust-index`
   on a GitHub-hosted runner on a push that changes `regions.toml`, so no
@@ -107,4 +110,6 @@ build scratch adds up. Rules:
   batch — **don't reimplement batch logic in YAML**. The runner still can't
   stream a multi-GB extract (same RAM gap).
 - Still out of scope: baked spatial index, duration estimate (F11), a RAM
-  gate / **streaming build** for `batch` — candidates for later milestones.
+  gate for `batch`, and D23's Tier 2 (external-sort disk spill — only if a
+  measured big-region build contradicts the D23 projection) — candidates
+  for later milestones.

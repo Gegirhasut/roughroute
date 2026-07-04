@@ -167,13 +167,15 @@ proof that routes are byte-for-byte unchanged.)
 
 Slovenia (~309 MB pbf) is the largest region built **locally**; bigger
 countries build on the CI runner (~16 GB RAM), not the dev VM. Austria
-(803.1 MB pbf) was **OOM-killed on this dev VM's 5.8 GB RAM** partway through
-building (`docs/DECISIONS.md` D18) — a real memory constraint of this dev
-machine, not a code defect. It's now added back as a deliberate **CI
-RAM-limit test** (D22): the size ceiling was raised 800 MB → 1.2 GB to admit
-it, and the per-region peak-RSS log will show whether the runner has the
-headroom, or where the wall is. Build Austria on CI only, never locally.
-`roughroute batch` still has no RAM gate — only disk gates.
+(803.1 MB pbf) was once **OOM-killed on this dev VM's 5.8 GB RAM**
+(`docs/DECISIONS.md` D18), was added back as a CI RAM-limit test (D22 — the
+size ceiling was raised 800 MB → 1.2 GB to admit it), and **measured
+6.28 GiB peak** on the runner with the pre-D23 builder. The D23 compact
+build has since cut peak build RAM **3.5–4.4×** with byte-identical output
+(Slovenia: 1.66 GiB → 389 MiB peak, debug), so region size is no longer
+RAM-bound at country scale — see the note under "Publishing (automated)".
+`roughroute batch` still has no RAM gate — only disk gates — but logs peak
+RSS per region (D21).
 
 ### Publishing (automated)
 
@@ -208,12 +210,16 @@ regions that OOM on a small local VM** (`docs/DECISIONS.md` D18). Regions are
 still processed one at a time with the `.pbf` deleted before the next, so
 runner disk stays flat no matter how many regions the manifest holds.
 
-> **Still bounded by RAM, not disk.** ~16 GB clears the regions that fail
-> locally, but a truly large extract (Germany/France, multi-GB `.pbf`) can
-> still OOM even on the runner — `batch` holds the whole graph in memory.
-> The real fix is a streaming build; it's tracked as a known gap in
-> `docs/DECISIONS.md` (D18 / the RAM note). Keep the manifest to region-sized
-> entries — no whole-country-of-continental-scale or planet extracts.
+> **RAM is no longer the binding limit for country-scale extracts.** The
+> D23 compact build (`docs/DECISIONS.md`) cut peak build RAM 3.5–4.4×
+> (measured, byte-identical output): projected ≈ 2 GiB of RAM per GB of
+> `.pbf` in release, so the ~16 GB runner should clear roughly a **6–7 GB
+> `.pbf`** — the Germany/France/all-Russia class fits the projection with
+> headroom. Two caveats: the 1.2 GB `HARD_MAX_PBF_BYTES` size gate still
+> stands and must be raised deliberately when a big region is actually
+> added (D17/D22 discipline), and the projection's validation point is the
+> first big region's peak-RSS log line on CI. Planet-scale extracts remain
+> out of scope.
 
 ### Publishing (manual)
 
