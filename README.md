@@ -126,10 +126,12 @@ entry look stale and triggers a one-time full rebuild on the next run — that
 format.
 
 Per region that does need building, strictly in order: probe the `.pbf`
-size (HEAD request) and **abort the whole run** if it exceeds a 1.2 GB hard
-safety ceiling (a blunt guard against an accidentally huge region —
-continent/country-scale extracts — derailing an unattended run; raised from
-800 MB to admit Austria as a CI RAM-limit test, `docs/DECISIONS.md` D22; an
+size (HEAD request) and **abort the whole run** if it exceeds a 6 GB hard
+safety ceiling (a blunt guard against an accidentally huge extract — a
+continent, the planet — derailing an unattended run; raised 800 MB → 1.2 GB
+for the Austria RAM-limit test, then 1.2 GB → 6 GB for the Germany/France
+big-country proof once the D23 compact build was confirmed on CI,
+`docs/DECISIONS.md` D22/D24; an
 unknown size also aborts, since the check can't be skipped) → check disk headroom
 (aborts if a download could fill the disk) → download the `.pbf` to scratch
 → build the `.graph` → verify it (re-load from disk + a trivial route in
@@ -170,10 +172,12 @@ countries build on the CI runner (~16 GB RAM), not the dev VM. Austria
 (803.1 MB pbf) was once **OOM-killed on this dev VM's 5.8 GB RAM**
 (`docs/DECISIONS.md` D18), was added back as a CI RAM-limit test (D22 — the
 size ceiling was raised 800 MB → 1.2 GB to admit it), and **measured
-6.28 GiB peak** on the runner with the pre-D23 builder. The D23 compact
-build has since cut peak build RAM **3.5–4.4×** with byte-identical output
-(Slovenia: 1.66 GiB → 389 MiB peak, debug), so region size is no longer
-RAM-bound at country scale — see the note under "Publishing (automated)".
+6.28 GiB peak** on the runner with the pre-D23 builder — then **1.44 GiB**
+rebuilt with the D23 compact build (4.36× lower, release, confirming the
+debug-measured 3.5–4.4× band; Slovenia: 1.66 GiB → 389 MiB peak, debug).
+Region size is no longer RAM-bound at country scale: Germany (4.79 GB pbf)
+and France (5.04 GB) are in the manifest as the big-country proof (D24) —
+see the note under "Publishing (automated)".
 `roughroute batch` still has no RAM gate — only disk gates — but logs peak
 RSS per region (D21).
 
@@ -212,14 +216,15 @@ runner disk stays flat no matter how many regions the manifest holds.
 
 > **RAM is no longer the binding limit for country-scale extracts.** The
 > D23 compact build (`docs/DECISIONS.md`) cut peak build RAM 3.5–4.4×
-> (measured, byte-identical output): projected ≈ 2 GiB of RAM per GB of
-> `.pbf` in release, so the ~16 GB runner should clear roughly a **6–7 GB
-> `.pbf`** — the Germany/France/all-Russia class fits the projection with
-> headroom. Two caveats: the 1.2 GB `HARD_MAX_PBF_BYTES` size gate still
-> stands and must be raised deliberately when a big region is actually
-> added (D17/D22 discipline), and the projection's validation point is the
-> first big region's peak-RSS log line on CI. Planet-scale extracts remain
-> out of scope.
+> (byte-identical output), **confirmed on CI**: Austria rebuilt at
+> 1.44 GiB peak vs 6.28 GiB pre-D23 — ≈ 1.8 GiB of RAM per GB of `.pbf`
+> in release, so the ~16 GB runner clears roughly a **7 GB `.pbf`**.
+> Germany (4.79 GB) and France (5.04 GB) are in the manifest as the
+> big-country proof; the size gate is 6 GB (`HARD_MAX_PBF_BYTES`, raised
+> deliberately per D17/D24 — it still refuses continent/planet extracts,
+> which remain out of scope). All-Russia is excluded for a non-RAM reason:
+> its extract crosses the antimeridian, which the builder refuses by
+> design (see Known limitations).
 
 ### Publishing (manual)
 

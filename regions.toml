@@ -74,7 +74,27 @@ pbf_url = "https://download.geofabrik.de/europe/montenegro-latest.osm.pbf"
 # that batch logs peak RSS per region (D21). Build it on CI ONLY, never
 # locally. Admitting it needed the pbf size gate raised 800 MB → 1.2 GB
 # (net.rs HARD_MAX_PBF_BYTES); the disk-headroom check is unchanged.
+# Result: 6.28 GiB peak pre-D23, 1.44 GiB after the D23 compact build.
 [[region]]
 id = "austria"
 name = "Austria"
 pbf_url = "https://download.geofabrik.de/europe/austria-latest.osm.pbf"
+
+# Big-country streaming-build proof (2026-07-04, docs/DECISIONS.md D24): the
+# two largest buildable European extracts (Germany 4.79 GB, France 5.04 GB as
+# probed). Projected ~8.6 / ~9.1 GiB peak on the ~16 GB CI runner from D23's
+# measured ~1.8 GiB RAM per GB of pbf — read their peak-RSS log lines to
+# confirm. Build on CI ONLY, never locally. Admitting them raised the size
+# gate 1.2 GB → 6 GB (net.rs HARD_MAX_PBF_BYTES). All-Russia was considered
+# and excluded: its extract crosses the ±180° antimeridian (Chukotka), which
+# the builder refuses by design (D3 / Known limitations) — that's a snapping-
+# projection scope limit, not a RAM one.
+[[region]]
+id = "germany"
+name = "Germany"
+pbf_url = "https://download.geofabrik.de/europe/germany-latest.osm.pbf"
+
+[[region]]
+id = "france"
+name = "France"
+pbf_url = "https://download.geofabrik.de/europe/france-latest.osm.pbf"

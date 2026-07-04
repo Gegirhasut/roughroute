@@ -51,7 +51,7 @@ missing or unparseable `index.json` degrades to "no cached entries" in
 either mode — never silently trusted, always a full rebuild.
 
 For a region that does need building, strictly: **hard size ceiling**
-(HEAD-probed `.pbf` size vs `HARD_MAX_PBF_BYTES = 1_200_000_000`; an unknown
+(HEAD-probed `.pbf` size vs `HARD_MAX_PBF_BYTES = 6_000_000_000`; an unknown
 size also aborts — the whole run stops, not just the region) →
 disk-headroom check (`df -P -B1`; also aborts the run when short) →
 download → build → verify (re-load written bytes + trivial routes) →
@@ -65,13 +65,15 @@ once OOM-killed graph construction on the 5.8 GB-RAM dev VM (D18), was
 re-admitted at a 1.2 GB ceiling (D22) as a CI RAM-limit probe, and measured
 **6.28 GiB peak** on the ~16 GB runner with the pre-D23 builder. The D23
 compact build then cut peak RSS **3.5–4.4×** (byte-identical output, proven
-by sha256 on all 10 locally-buildable regions), projecting ≈ 2 GiB RAM per
-GB of pbf in release — country-scale extracts are no longer RAM-bound; the
-1.2 GB *size* ceiling is now the binding gate and gets raised deliberately
-when a bigger region is added. `batch` still **measures peak RSS per
+by sha256 on all 10 locally-buildable regions), **confirmed on CI**:
+Austria rebuilt at 1.44 GiB (release) ≈ 1.8 GiB RAM per GB of pbf —
+country-scale extracts are no longer RAM-bound. The *size* ceiling is now
+6 GB (D24, admitting Germany 4.79 GB / France 5.04 GB as the big-country
+proof; all-Russia is excluded — antimeridian, not RAM) and gets raised
+only deliberately. `batch` still **measures peak RSS per
 region** (`mem.rs`, D21) and prints it in each region's `ok:` log line,
 plus total system RAM once at the start — read those to validate headroom
-(the first big-region build is D23's projection check). Measurement only:
+(Germany/France's lines are D24's proof point). Measurement only:
 `/proc`-based (`VmHWM`, reset via `clear_refs` between regions),
 Linux-only, off the core, changes no build result. Still never build
 Austria-class regions locally — 4.4× lower peak on a 5.8 GB VM is thinner

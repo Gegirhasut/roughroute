@@ -420,7 +420,8 @@ short. Verification = re-read the written file, `Graph::from_bytes`, and a
 trivial route between two node coordinates of the loaded graph.
 
 **Hard size ceiling (added 2026-07-03 at `HARD_MAX_PBF_BYTES = 800_000_000`;
-raised to `1_200_000_000` for the Austria test, D22):**
+raised to `1_200_000_000` for the Austria test, D22, then to
+`6_000_000_000` for the big-country streaming-build proof, D24):**
 checked *before* the headroom math, on the same HEAD-probed
 `Content-Length` — a technically-fitting-but-huge extract (a continent, a
 country the size of the US) would otherwise pass the headroom check on a
@@ -940,6 +941,49 @@ puts the Germany/France class comfortably within the runner; the external-
 sort spill adds real complexity (temp-file lifecycle, k-way merge) for a
 class of extract (10 GB+, near-planet) that is out of scope. Revisit only if
 a measured big-region build contradicts the projection.
+
+**CI confirmation (release, ~16 GB runner, 2026-07-04):** Austria (803 MB
+pbf) rebuilt with the D23 builder peaked at **1.44 GiB — down from the
+6.28 GiB** measured pre-D23 on the same runner. That's a 4.36× cut in
+release, matching the 3.5–4.4× band measured locally in debug, and pins the
+real-world coefficient at **~1.8 GiB RAM per GB of pbf** — the number D24's
+big-country test builds on.
+
+## D24. Raise the `.pbf` ceiling to 6 GB for the big-country streaming-build proof (2026-07-04)
+
+**Context.** With D23 confirmed on CI (Austria 6.28 → 1.44 GiB, above), the
+projected peaks for the largest common European extracts sit well inside the
+runner's ~14 GB usable: probed 2026-07-04, Germany
+(`europe/germany-latest.osm.pbf`) is 4,792,254,621 bytes ≈ 4.79 GB
+(projected ≈ 8.6 GiB peak) and France (`europe/france-latest.osm.pbf`) is
+5,036,012,995 bytes ≈ 5.04 GB (projected ≈ 9.1 GiB). Building them is the
+ceiling-removal proof: their per-region peak-RSS log lines (D21) either
+confirm the ~1.8 GiB/GB coefficient at 6× Austria's size or send us to
+D23's Tier 2.
+
+**Decision.** Raise `HARD_MAX_PBF_BYTES` from `1_200_000_000` to
+`6_000_000_000` (6 GB) and add `germany` and `france` to `regions.toml`.
+A 5 GB gate was considered first, but France already measures 5.04 GB — the
+gate must clear the regions actually intended, with margin for Geofabrik's
+weekly growth, while still refusing continent/planet-scale accidents
+(`europe-latest` is ~30 GB — still comfortably refused). The `df`
+disk-headroom check (2 × pbf + 1 GiB) is unchanged and still guards disk:
+Germany needs ~10.6 GB through download+build against the runner's ~87 GB
+free. Both regions build **on CI only** — never locally (a ~9 GiB peak on
+the 5.8 GB dev VM is an instant OOM).
+
+**Russia — requested, and excluded on purpose.** All-Russia
+(`russia-latest.osm.pbf`, 4.12 GB probed, a top-level Geofabrik extract not
+under `europe/`) would pass both the size and RAM math, but its extract
+crosses the ±180° antimeridian (Chukotka: Kaliningrad ~19.9°E to Wrangel
+Island ~−179°, a ~359° longitude span), and `build_graph` refuses any
+region spanning more than 180° with `AntimeridianSpanning` — the D3 /
+"Known limitations" snapping-projection scope limit, unrelated to RAM.
+Adding it would burn a 4.1 GB CI download to reproduce a failure the code
+already documents. If Russia coverage is ever wanted, the paths are
+Geofabrik's per-district Russia extracts (each well within the seam) or
+implementing antimeridian support (the known-limitations entry's "real
+fix").
 
 ## Known limitations (deliberate v1 scope)
 
