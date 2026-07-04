@@ -20,6 +20,9 @@
     --route-dim:#3f7a52;
     --node:#4a6572;        /* graph node */
     --amber:#e8c07d;       /* waypoint marker */
+    --accent-car:var(--route);  /* demo: car route line */
+    --accent-foot:#8fb4c9;      /* demo: foot route line (the code keyword blue) */
+    --danger:#e0796a;           /* demo: fallback / error state */
     --radius:0px;
     --maxw:1080px;
   }
@@ -210,6 +213,79 @@
   .byline a{color:var(--muted);border-bottom:1px solid var(--line-2);padding-bottom:1px}
   .byline a:hover{color:var(--route);border-color:var(--route)}
 
+  /* ---------- live demo (#demo) ---------- */
+  /* Everything below reuses the existing tokens; the only new colors are the
+     three vars added to :root (--accent-car aliases --route). The shell has a
+     fixed height so lazy-loading the map never shifts the rest of the page. */
+  .demo-shell{
+    position:relative;border:1px solid var(--line);background:var(--ink-2);
+    height:clamp(420px,62vh,560px);overflow:hidden;
+  }
+  #demoMap{position:absolute;inset:0;background:#0a1116}
+  /* overlays sit above Leaflet's controls (z-index 1000) */
+  .demo-overlay{
+    position:absolute;inset:0;z-index:1100;
+    display:flex;flex-direction:column;align-items:center;justify-content:center;
+    gap:18px;padding:24px;text-align:center;background:rgba(11,16,20,0.88);
+  }
+  .demo-overlay[hidden],.demo-card[hidden],.demo-toast[hidden],.demo-chip[hidden]{display:none}
+  .demo-note{font-family:'Space Mono',monospace;font-size:12px;color:var(--muted);max-width:460px;line-height:1.7}
+  .demo-note.demo-err{color:var(--danger)}
+  .demo-progress-track{width:min(340px,70%);height:4px;background:var(--line-2)}
+  .demo-progress-fill{width:0%;height:100%;background:var(--route);transition:width .2s linear}
+  .btn:focus-visible,.seg:focus-visible,.lang-select:focus-visible,.region:focus-visible{outline:2px solid var(--route);outline-offset:2px}
+  /* the demo's .btn elements are <button>s, not <a>s — strip the UA chrome */
+  button.btn{background:transparent;color:inherit;cursor:pointer}
+  .btn.demo-load{cursor:pointer;background:var(--route);color:#08120b;border:1px solid var(--route);font-family:'Space Mono',monospace;font-weight:700;font-size:14px;padding:14px 22px}
+  .btn.demo-load:hover{background:#96e6a8;border-color:#96e6a8}
+  /* control card: floats over the map top-right on wide screens */
+  .demo-card{
+    position:absolute;top:14px;right:14px;z-index:1050;width:236px;
+    display:flex;flex-direction:column;gap:12px;padding:16px;
+    background:rgba(17,26,32,0.94);border:1px solid var(--line-2);
+  }
+  .demo-profile{display:flex;border:1px solid var(--line-2)}
+  .seg{
+    flex:1;padding:8px 0;background:transparent;color:var(--muted);border:0;cursor:pointer;
+    font-family:'Space Mono',monospace;font-size:12.5px;font-weight:700;letter-spacing:0.04em;
+    transition:background .15s,color .15s;
+  }
+  .seg[data-profile="car"].active{background:var(--accent-car);color:#08120b}
+  .seg[data-profile="foot"].active{background:var(--accent-foot);color:#08120b}
+  .demo-readout{display:flex;flex-wrap:wrap;gap:8px 16px;align-items:center;font-family:'Space Mono',monospace}
+  .demo-stat{display:flex;flex-direction:column;gap:2px}
+  .demo-stat .lbl{font-size:10.5px;letter-spacing:0.12em;text-transform:uppercase;color:var(--muted)}
+  .demo-stat b{font-size:14px;color:var(--paper);font-weight:700}
+  .demo-chip{
+    font-family:'Space Mono',monospace;font-size:10.5px;letter-spacing:0.06em;
+    padding:3px 8px;border:1px solid var(--route-dim);color:var(--route);
+  }
+  .demo-chip.fallback{border-color:var(--danger);color:var(--danger)}
+  .demo-hint{font-size:12px;color:var(--muted);line-height:1.55}
+  .btn.demo-clear{cursor:pointer;background:transparent;color:var(--paper);padding:8px 0;text-align:center;justify-content:center;font-size:12.5px}
+  .demo-toast{
+    position:absolute;bottom:18px;left:50%;transform:translateX(-50%);z-index:1060;
+    max-width:min(520px,88%);padding:10px 16px;font-size:12.5px;text-align:center;
+    background:#170f11;border:1px solid var(--danger);color:var(--danger);
+  }
+  /* numbered draggable waypoint markers (Leaflet divIcon content) */
+  .rr-wp{
+    width:24px;height:24px;border-radius:50%;
+    display:flex;align-items:center;justify-content:center;
+    background:var(--amber);color:#08120b;border:2px solid #08120b;
+    box-shadow:0 0 0 2px rgba(232,192,125,0.4);
+    font-family:'Space Mono',monospace;font-size:12px;font-weight:700;
+  }
+  /* Leaflet chrome, re-tinted to the page palette */
+  .demo-shell .leaflet-bar a{background:var(--ink-2);color:var(--paper);border-bottom:1px solid var(--line-2)}
+  .demo-shell .leaflet-bar a:hover{background:#15222a;color:var(--route)}
+  .demo-shell .leaflet-control-attribution{background:rgba(11,16,20,0.8);color:var(--muted);font-size:10px}
+  .demo-shell .leaflet-control-attribution a{color:var(--muted)}
+  @media(max-width:640px){
+    .demo-card{top:auto;bottom:10px;left:10px;right:10px;width:auto;padding:12px;gap:10px}
+    .demo-shell{height:70vh}
+  }
+
   /* ---------- responsive ---------- */
   @media(max-width:860px){
     .grid{grid-template-columns:1fr 1fr}
@@ -226,6 +302,7 @@
   @media(prefers-reduced-motion:reduce){
     .edge-anim,.route-draw{animation:none !important}
     .route-draw{stroke-dashoffset:0 !important}
+    .demo-progress-fill{transition:none}
   }
 </style>
 </head>
@@ -243,6 +320,7 @@
       <a href="#why" data-en="why" data-ru="зачем" data-zh="为何" data-es="por qué" data-de="warum" data-fr="pourquoi" data-pt="porquê" data-ja="理由" data-ar="لماذا">why</a>
       <a href="#how" data-en="how" data-ru="как" data-zh="原理" data-es="cómo" data-de="wie" data-fr="comment" data-pt="como" data-ja="仕組み" data-ar="كيف">how</a>
       <a href="#use" data-en="use" data-ru="как использовать" data-zh="用法" data-es="uso" data-de="nutzung" data-fr="usage" data-pt="uso" data-ja="使い方" data-ar="الاستخدام">use</a>
+      <a href="#demo" data-en="demo" data-ru="демо" data-zh="演示" data-es="demo" data-de="demo" data-fr="démo" data-pt="demo" data-ja="デモ" data-ar="تجربة">demo</a>
       <a href="https://github.com/Gegirhasut/roughroute">github ↗</a>
       <select class="lang-select" id="langSelect" aria-label="Language">
         <option value="en">EN · English</option>
@@ -418,6 +496,53 @@ roughroute <span class="g">route</span> --graph cyprus.graph --profile car \
   </div>
 </section>
 
+<!-- DEMO -->
+<section id="demo">
+  <div class="wrap">
+    <div class="sec-head">
+      <span class="eyebrow" data-en="Live demo" data-ru="Живое демо" data-zh="在线演示" data-es="Demo en vivo" data-de="Live-Demo" data-fr="Démo en direct" data-pt="Demo ao vivo" data-ja="ライブデモ" data-ar="تجربة حيّة">Live demo</span>
+      <h2 data-en="Drop two points. A* runs in your browser." data-ru="Поставьте две точки. A* работает прямо в браузере." data-zh="放下两个点，A* 就在你的浏览器里运行。" data-es="Coloca dos puntos. A* corre en tu navegador." data-de="Setze zwei Punkte. A* läuft in deinem Browser." data-fr="Posez deux points. A* tourne dans votre navigateur." data-pt="Coloque dois pontos. O A* roda no seu navegador." data-ja="2 つの点を置くだけ。A* はブラウザの中で動きます。" data-ar="ضع نقطتين. تعمل A* داخل متصفحك.">Drop two points. A* runs in your browser.</h2>
+      <p data-en="The Cyprus graph (~20 MB) loads once into WASM. After that every route below is computed on your device in milliseconds — no routing server, no per-route network call. Only the map tiles come from the network." data-ru="Граф Кипра (~20 МБ) один раз загружается в WASM. Дальше каждый маршрут ниже считается на вашем устройстве за миллисекунды — без сервера маршрутизации и без сетевых запросов на маршрут. Из сети приходят только тайлы карты." data-zh="塞浦路斯图（约 20 MB）一次性加载进 WASM。此后下面的每条路线都在你的设备上以毫秒级算出——没有路由服务器，求路时不发任何网络请求。唯一来自网络的是地图瓦片。" data-es="El grafo de Chipre (~20 MB) se carga una sola vez en WASM. Después, cada ruta de abajo se calcula en tu dispositivo en milisegundos — sin servidor de rutas, sin llamadas de red por ruta. Solo las teselas del mapa vienen de la red." data-de="Der Zypern-Graph (~20 MB) lädt einmal in WASM. Danach wird jede Route unten in Millisekunden auf deinem Gerät berechnet — kein Routing-Server, kein Netzwerkaufruf pro Route. Nur die Kartenkacheln kommen aus dem Netz." data-fr="Le graphe de Chypre (~20 Mo) se charge une seule fois en WASM. Ensuite, chaque itinéraire ci-dessous est calculé sur votre appareil en quelques millisecondes — pas de serveur de routage, pas d'appel réseau par itinéraire. Seules les tuiles de la carte viennent du réseau." data-pt="O grafo do Chipre (~20 MB) carrega uma única vez em WASM. Depois disso, cada rota abaixo é calculada no seu dispositivo em milissegundos — sem servidor de rotas, sem chamada de rede por rota. Só os tiles do mapa vêm da rede." data-ja="キプロスのグラフ（約 20 MB）は WASM に一度だけ読み込まれます。その後は、下のすべてのルートがお使いのデバイス上でミリ秒単位で計算されます — ルーティングサーバーもなく、ルートごとのネットワーク呼び出しもありません。ネットワークから来るのは地図タイルだけです。" data-ar="يُحمَّل رسم قبرص البياني (~20 م.ب) مرة واحدة في WASM. بعد ذلك يُحسب كل مسار أدناه على جهازك خلال مللي ثوانٍ — بلا خادم توجيه، وبلا نداء شبكي لكل مسار. لا يأتي من الشبكة سوى بلاطات الخريطة.">The Cyprus graph (~20 MB) loads once into WASM. After that every route below is computed on your device in milliseconds — no routing server, no per-route network call. Only the map tiles come from the network.</p>
+    </div>
+    <!-- dir="ltr" pins the floating card and Leaflet chrome in place under RTL,
+         like the other technical blocks (.coords, .code-block) -->
+    <div class="demo-shell" dir="ltr">
+      <div id="demoMap" aria-label="Interactive Cyprus routing map"></div>
+
+      <div class="demo-overlay" id="demoIdle">
+        <button class="btn demo-load" id="demoLoadBtn" data-en="Load live demo (~20 MB)" data-ru="Загрузить живое демо (~20 МБ)" data-zh="加载在线演示（约 20 MB）" data-es="Cargar demo en vivo (~20 MB)" data-de="Live-Demo laden (~20 MB)" data-fr="Charger la démo (~20 Mo)" data-pt="Carregar demo ao vivo (~20 MB)" data-ja="ライブデモを読み込む（約 20 MB）" data-ar="تحميل التجربة الحيّة (~20 م.ب)">Load live demo (~20 MB)</button>
+        <p class="demo-note" data-en="One-time download, cached for repeat visits. Map tiles © OpenStreetMap contributors © CARTO — the routing itself runs locally." data-ru="Однократная загрузка, кэшируется для повторных визитов. Тайлы карты © OpenStreetMap contributors © CARTO — сама маршрутизация выполняется локально." data-zh="一次性下载，缓存后再次访问即时可用。地图瓦片 © OpenStreetMap contributors © CARTO——路由本身在本地运行。" data-es="Descarga única, cacheada para visitas posteriores. Teselas del mapa © OpenStreetMap contributors © CARTO — el enrutamiento corre localmente." data-de="Einmaliger Download, für weitere Besuche gecacht. Kartenkacheln © OpenStreetMap contributors © CARTO — das Routing selbst läuft lokal." data-fr="Téléchargement unique, mis en cache pour les visites suivantes. Tuiles © OpenStreetMap contributors © CARTO — le routage lui-même tourne localement." data-pt="Download único, em cache para visitas futuras. Tiles do mapa © OpenStreetMap contributors © CARTO — o roteamento em si roda localmente." data-ja="ダウンロードは一度だけ、再訪問時のためにキャッシュされます。地図タイル © OpenStreetMap contributors © CARTO — ルーティング自体はローカルで実行されます。" data-ar="تنزيل لمرة واحدة، يُخزَّن مؤقتًا للزيارات اللاحقة. بلاطات الخريطة © OpenStreetMap contributors © CARTO — أما التوجيه نفسه فيعمل محليًا.">One-time download, cached for repeat visits. Map tiles © OpenStreetMap contributors © CARTO — the routing itself runs locally.</p>
+      </div>
+
+      <div class="demo-overlay" id="demoProgress" hidden>
+        <div class="demo-progress-track" aria-hidden="true"><div class="demo-progress-fill" id="demoProgressFill"></div></div>
+        <p class="demo-note" id="demoStatus" aria-live="polite"></p>
+      </div>
+
+      <div class="demo-overlay" id="demoError" hidden>
+        <p class="demo-note demo-err" id="demoErrorMsg" aria-live="polite"></p>
+        <button class="btn ghost" id="demoRetryBtn" data-en="Retry" data-ru="Повторить" data-zh="重试" data-es="Reintentar" data-de="Erneut versuchen" data-fr="Réessayer" data-pt="Tentar novamente" data-ja="再試行" data-ar="إعادة المحاولة">Retry</button>
+      </div>
+
+      <div class="demo-card" id="demoCard" hidden>
+        <div class="demo-profile" role="group" aria-label="Routing profile" id="demoProfile">
+          <button class="seg active" data-profile="car" data-en="car" data-ru="машина" data-zh="驾车" data-es="coche" data-de="Auto" data-fr="voiture" data-pt="carro" data-ja="車" data-ar="سيارة">car</button>
+          <button class="seg" data-profile="foot" data-en="foot" data-ru="пешком" data-zh="步行" data-es="a pie" data-de="zu Fuß" data-fr="à pied" data-pt="a pé" data-ja="徒歩" data-ar="مشي">foot</button>
+        </div>
+        <div class="demo-readout">
+          <div class="demo-stat"><span class="lbl" data-en="distance" data-ru="расстояние" data-zh="距离" data-es="distancia" data-de="Distanz" data-fr="distance" data-pt="distância" data-ja="距離" data-ar="المسافة">distance</span><b id="demoDist">—</b></div>
+          <div class="demo-stat"><span class="lbl" data-en="query" data-ru="запрос" data-zh="查询" data-es="consulta" data-de="Abfrage" data-fr="requête" data-pt="consulta" data-ja="クエリ" data-ar="الاستعلام">query</span><b id="demoTime">—</b></div>
+          <span class="demo-chip" id="demoChip" hidden></span>
+        </div>
+        <p class="demo-hint" data-en="Click the map to drop numbered waypoints — drag a marker to reroute." data-ru="Кликайте по карте, чтобы ставить нумерованные точки — перетащите маркер, чтобы пересчитать маршрут." data-zh="点击地图放置带编号的途经点——拖动标记即可重新计算路线。" data-es="Haz clic en el mapa para soltar waypoints numerados — arrastra un marcador para recalcular." data-de="Klicke auf die Karte, um nummerierte Wegpunkte zu setzen — ziehe einen Marker, um neu zu routen." data-fr="Cliquez sur la carte pour poser des points numérotés — faites glisser un marqueur pour recalculer." data-pt="Clique no mapa para soltar waypoints numerados — arraste um marcador para recalcular." data-ja="地図をクリックして番号付きの経由地点を置き、マーカーをドラッグすると再計算されます。" data-ar="انقر على الخريطة لوضع نقاط مرقّمة — واسحب علامة لإعادة حساب المسار.">Click the map to drop numbered waypoints — drag a marker to reroute.</p>
+        <button class="btn ghost demo-clear" id="demoClearBtn" data-en="Clear" data-ru="Очистить" data-zh="清除" data-es="Limpiar" data-de="Zurücksetzen" data-fr="Effacer" data-pt="Limpar" data-ja="クリア" data-ar="مسح">Clear</button>
+      </div>
+
+      <div class="demo-toast" id="demoToast" role="status" aria-live="polite" hidden></div>
+    </div>
+  </div>
+</section>
+
 <!-- REGIONS -->
 <section id="regions">
   <div class="wrap">
@@ -475,17 +600,20 @@ roughroute <span class="g">route</span> --graph cyprus.graph --profile car \
 
 <script>
 /* ---------- language selector (EN default; others fall back to EN until translated) ---------- */
+window.__rrLang = 'en';   // current UI language; runtime-generated strings (demo) read this
 (function(){
   const sel = document.getElementById('langSelect');
   if(!sel) return;
   const rtl = ['ar','he','fa','ur'];
   function apply(l){
+    window.__rrLang = l;
     document.documentElement.setAttribute('lang', l==='zh' ? 'zh-Hans' : l);
     document.documentElement.setAttribute('dir', rtl.includes(l) ? 'rtl' : 'ltr');
     document.querySelectorAll('[data-en]').forEach(el=>{
       const val = el.getAttribute('data-'+l);
       el.innerHTML = (val != null) ? val : el.getAttribute('data-en');   // fall back to EN
     });
+    window.dispatchEvent(new Event('rr-lang'));   // let dynamic UI re-render its strings
   }
   sel.addEventListener('change', ()=> apply(sel.value));
 })();
@@ -606,6 +734,366 @@ roughroute <span class="g">route</span> --graph cyprus.graph --profile car \
   build();
   let t;
   window.addEventListener('resize', ()=>{ clearTimeout(t); t=setTimeout(build,250); });
+})();
+
+/* ---------- live demo: Cyprus routing, fully in-browser (lazy) ----------
+   Nothing below loads until the "Load live demo" button is pressed: Leaflet
+   is injected from unpkg, the graph is streamed (and cached via the Cache
+   API), the wasm-pack module is dynamically imported, and every route is then
+   computed locally by WasmRouter — no per-route network call.
+   Coordinates are [lat, lon] end to end: the roughroute contract and
+   Leaflet's [lat, lng] agree, so nothing is ever swapped. */
+(function(){
+  'use strict';
+
+  /* ======================= demo config (all knobs) =======================
+     GitHub release-asset URLs send no CORS headers on either redirect hop
+     (measured 2026-07-04), so a browser can only fetch the graph SAME-ORIGIN:
+     the Pages deploy workflow ships cyprus.graph + index.json next to this
+     page. The release URL stays as a fallback for other hosting setups. */
+  const CFG = {
+    REGION_ID: 'cyprus',
+    GRAPH_SOURCES: [
+      './cyprus.graph',                                                                    // same-origin (primary)
+      'https://github.com/Gegirhasut/roughroute/releases/download/graphs-v3/cyprus.graph', // fallback (needs CORS)
+    ],
+    INDEX_JSON: './index.json',      // same-origin copy; resolves sha256 + exact byte size
+    GRAPH_SHA256: '',                // optional pin; '' → use index.json's sha256 when present
+    GRAPH_BYTES_HINT: 20765042,      // progress-bar total when index.json is unavailable
+    WASM_JS: './pkg/roughroute_wasm.js',  // wasm-pack --target web output (CI-built)
+    CACHE_NAME: 'roughroute-demo-v1',
+    LEAFLET_CSS: 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css',
+    LEAFLET_JS:  'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js',
+    LEAFLET_CSS_SRI: 'sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=',
+    LEAFLET_JS_SRI:  'sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=',
+    TILES: 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
+    TILE_SUBDOMAINS: 'abcd',
+    ATTRIBUTION: '&copy; OpenStreetMap contributors &copy; CARTO',
+    BBOX: [[34.45, 32.20], [35.80, 34.70]],   // hard lock: Cyprus only
+    CENTER: [35.0, 33.3], ZOOM: 9, MIN_ZOOM: 8, MAX_ZOOM: 16,
+  };
+
+  /* runtime-generated strings (statuses, chip, toast); static labels use the
+     same data-* attribute system as the rest of the page */
+  const STR = {
+    en: { sLeaflet:'Loading the map library…', sGraph:'Downloading the Cyprus graph…', sVerify:'Verifying checksum…', sStart:'Starting the router…',
+          chipRoads:'follows roads', chipFallback:'straight-line fallback',
+          toastSnap:'That point is too far from any road — pick a spot on land.',
+          errLoad:'The demo failed to load.',
+          errCors:'The graph download was blocked: the asset sends no CORS headers. Serve cyprus.graph from this same origin — the Pages deploy workflow does that automatically.' },
+    ru: { sLeaflet:'Загрузка библиотеки карты…', sGraph:'Загрузка графа Кипра…', sVerify:'Проверка контрольной суммы…', sStart:'Запуск роутера…',
+          chipRoads:'по дорогам', chipFallback:'прямая линия (fallback)',
+          toastSnap:'Эта точка слишком далеко от дорог — выберите место на суше.',
+          errLoad:'Не удалось загрузить демо.',
+          errCors:'Загрузка графа заблокирована: у ресурса нет CORS-заголовков. Разместите cyprus.graph на этом же домене — workflow деплоя Pages делает это автоматически.' },
+    zh: { sLeaflet:'正在加载地图库…', sGraph:'正在下载塞浦路斯图…', sVerify:'正在校验哈希…', sStart:'正在启动路由器…',
+          chipRoads:'沿道路', chipFallback:'直线回退',
+          toastSnap:'该点离任何道路都太远——请选择陆地上的位置。',
+          errLoad:'演示加载失败。',
+          errCors:'图下载被阻止：该资源未提供 CORS 头。请将 cyprus.graph 部署到本站同源路径——Pages 部署工作流会自动完成。' },
+    es: { sLeaflet:'Cargando la librería del mapa…', sGraph:'Descargando el grafo de Chipre…', sVerify:'Verificando checksum…', sStart:'Iniciando el router…',
+          chipRoads:'sigue carreteras', chipFallback:'recta de respaldo',
+          toastSnap:'Ese punto está demasiado lejos de cualquier carretera — elige un lugar en tierra.',
+          errLoad:'No se pudo cargar la demo.',
+          errCors:'La descarga del grafo fue bloqueada: el recurso no envía cabeceras CORS. Sirve cyprus.graph desde este mismo origen — el workflow de Pages lo hace automáticamente.' },
+    de: { sLeaflet:'Kartenbibliothek wird geladen…', sGraph:'Zypern-Graph wird heruntergeladen…', sVerify:'Prüfsumme wird geprüft…', sStart:'Router wird gestartet…',
+          chipRoads:'folgt Straßen', chipFallback:'Gerade als Fallback',
+          toastSnap:'Dieser Punkt ist zu weit von jeder Straße entfernt — wähle eine Stelle an Land.',
+          errLoad:'Die Demo konnte nicht geladen werden.',
+          errCors:'Der Graph-Download wurde blockiert: die Ressource sendet keine CORS-Header. Liefere cyprus.graph vom selben Origin aus — der Pages-Workflow erledigt das automatisch.' },
+    fr: { sLeaflet:'Chargement de la bibliothèque de carte…', sGraph:'Téléchargement du graphe de Chypre…', sVerify:'Vérification de la somme de contrôle…', sStart:'Démarrage du routeur…',
+          chipRoads:'suit les routes', chipFallback:'repli en ligne droite',
+          toastSnap:'Ce point est trop loin de toute route — choisissez un endroit sur la terre ferme.',
+          errLoad:'Impossible de charger la démo.',
+          errCors:'Le téléchargement du graphe a été bloqué : la ressource n\'envoie pas d\'en-têtes CORS. Servez cyprus.graph depuis cette même origine — le workflow Pages le fait automatiquement.' },
+    pt: { sLeaflet:'Carregando a biblioteca do mapa…', sGraph:'Baixando o grafo do Chipre…', sVerify:'Verificando o checksum…', sStart:'Iniciando o roteador…',
+          chipRoads:'segue estradas', chipFallback:'reta de contingência',
+          toastSnap:'Esse ponto está longe demais de qualquer estrada — escolha um lugar em terra.',
+          errLoad:'Não foi possível carregar a demo.',
+          errCors:'O download do grafo foi bloqueado: o recurso não envia cabeçalhos CORS. Sirva o cyprus.graph a partir desta mesma origem — o workflow do Pages faz isso automaticamente.' },
+    ja: { sLeaflet:'地図ライブラリを読み込み中…', sGraph:'キプロスのグラフをダウンロード中…', sVerify:'チェックサムを検証中…', sStart:'ルーターを起動中…',
+          chipRoads:'道路に沿う', chipFallback:'直線フォールバック',
+          toastSnap:'その地点はどの道路からも遠すぎます — 陸地の上を選んでください。',
+          errLoad:'デモを読み込めませんでした。',
+          errCors:'グラフのダウンロードがブロックされました：アセットが CORS ヘッダーを送っていません。cyprus.graph をこのページと同一オリジンに配置してください — Pages のデプロイワークフローが自動で行います。' },
+    ar: { sLeaflet:'جارٍ تحميل مكتبة الخريطة…', sGraph:'جارٍ تنزيل رسم قبرص البياني…', sVerify:'جارٍ التحقق من المجموع الاختباري…', sStart:'جارٍ تشغيل الموجّه…',
+          chipRoads:'يتبع الطرق', chipFallback:'خط مستقيم احتياطي',
+          toastSnap:'هذه النقطة بعيدة جدًا عن أي طريق — اختر موضعًا على اليابسة.',
+          errLoad:'تعذّر تحميل التجربة.',
+          errCors:'حُظر تنزيل الرسم البياني: المورد لا يرسل ترويسات CORS. قدّم cyprus.graph من نفس الأصل — يقوم سير عمل النشر إلى Pages بذلك تلقائيًا.' },
+  };
+  const t = k => (STR[window.__rrLang] || STR.en)[k] || STR.en[k];
+
+  const $ = id => document.getElementById(id);
+  const idleBox = $('demoIdle'), progBox = $('demoProgress'), errBox = $('demoError');
+  const statusEl = $('demoStatus'), fillEl = $('demoProgressFill'), errMsgEl = $('demoErrorMsg');
+  const card = $('demoCard'), distEl = $('demoDist'), timeEl = $('demoTime'), chipEl = $('demoChip');
+  const toastEl = $('demoToast');
+  if(!idleBox) return;
+  const reduce = window.matchMedia('(prefers-reduced-motion: reduce)');
+
+  let map = null, router = null, profile = 'car', loading = false;
+  const waypoints = [], markers = [];       // waypoints[i] = [lat, lon], markers[i] its L.marker
+  let routeLayers = [], lastRes = null, lastMs = null, toastTimer = 0;
+
+  /* ---------- loading pipeline ---------- */
+  $('demoLoadBtn').addEventListener('click', start);
+  $('demoRetryBtn').addEventListener('click', start);
+
+  async function start(){
+    if(loading || router) return;
+    loading = true;
+    idleBox.hidden = true; errBox.hidden = true; progBox.hidden = false;
+    setProgress(0);
+    try{
+      status(t('sLeaflet'));
+      await loadLeaflet();                     // `L` exists only after this resolves
+      initMap();                               // shows tiles behind the progress overlay
+      status(t('sGraph'));
+      const meta = await fetchIndexMeta();
+      const bytes = await fetchGraph(meta);
+      status(t('sStart'));
+      const mod = await import(CFG.WASM_JS);
+      await mod.default();                     // wasm-pack --target web init
+      router = new mod.WasmRouter(bytes);
+      progBox.hidden = true;
+      card.hidden = false;
+    }catch(e){
+      console.error('demo load failed:', e);
+      progBox.hidden = true;
+      errMsgEl.textContent = (e && e.rrCors) ? t('errCors') : (t('errLoad') + ' — ' + ((e && e.message) || e));
+      errBox.hidden = false;
+    }finally{
+      loading = false;
+    }
+  }
+
+  function status(s){ statusEl.textContent = s; }
+  function setProgress(frac){ fillEl.style.width = (Math.min(1, frac) * 100).toFixed(1) + '%'; }
+
+  let leafletPromise = null;
+  function loadLeaflet(){
+    if(window.L) return Promise.resolve();
+    if(leafletPromise) return leafletPromise;
+    leafletPromise = new Promise((resolve, reject)=>{
+      const link = document.createElement('link');
+      link.rel = 'stylesheet'; link.href = CFG.LEAFLET_CSS;
+      link.integrity = CFG.LEAFLET_CSS_SRI; link.crossOrigin = 'anonymous';
+      document.head.appendChild(link);
+      const s = document.createElement('script');
+      s.src = CFG.LEAFLET_JS; s.integrity = CFG.LEAFLET_JS_SRI; s.crossOrigin = 'anonymous';
+      s.onload = ()=> resolve();               // never reference L before this fires
+      s.onerror = ()=>{ leafletPromise = null; reject(new Error('Leaflet failed to load from unpkg')); };
+      document.head.appendChild(s);
+    });
+    return leafletPromise;
+  }
+
+  /* same-origin index.json (deployed next to the page) → sha256 + exact size;
+     absent (e.g. a bare local checkout) → fall back to the config constants */
+  async function fetchIndexMeta(){
+    try{
+      const r = await fetch(CFG.INDEX_JSON, {cache: 'no-cache'});
+      if(!r.ok) return null;
+      const idx = await r.json();
+      return (idx.regions || []).find(x => x.id === CFG.REGION_ID) || null;
+    }catch(_){ return null; }
+  }
+
+  async function fetchGraph(meta){
+    const total = (meta && meta.bytes) || CFG.GRAPH_BYTES_HINT;
+    const wantSha = (CFG.GRAPH_SHA256 || (meta && meta.sha256) || '').toLowerCase();
+    let cache = null;
+    try{ if('caches' in window) cache = await caches.open(CFG.CACHE_NAME); }catch(_){ /* http/file dev */ }
+
+    if(cache){
+      for(const src of CFG.GRAPH_SOURCES){
+        const hit = await cache.match(src);
+        if(!hit) continue;
+        const bytes = new Uint8Array(await hit.arrayBuffer());
+        setProgress(1);
+        status(t('sVerify'));
+        if(await shaOk(bytes, wantSha)) return bytes;
+        await cache.delete(src);               // stale (region rebuilt) — refetch below
+        status(t('sGraph'));
+      }
+    }
+
+    let lastErr = null;
+    for(const src of CFG.GRAPH_SOURCES){
+      try{
+        const bytes = await streamFetch(src, total);
+        status(t('sVerify'));
+        if(!(await shaOk(bytes, wantSha))) throw new Error('sha256 mismatch for ' + src);
+        if(cache){ try{ await cache.put(src, new Response(bytes)); }catch(_){ /* quota */ } }
+        return bytes;
+      }catch(e){ lastErr = e; }
+    }
+    // a cross-origin fetch without CORS headers rejects as an opaque TypeError
+    if(lastErr instanceof TypeError) lastErr.rrCors = true;
+    throw lastErr || new Error('no graph source configured');
+  }
+
+  async function streamFetch(url, totalHint){
+    const resp = await fetch(url);
+    if(!resp.ok) throw new Error('HTTP ' + resp.status + ' for ' + url);
+    const total = Number(resp.headers.get('content-length')) || totalHint;
+    if(!resp.body){                            // no ReadableStream support
+      const buf = new Uint8Array(await resp.arrayBuffer());
+      setProgress(1);
+      return buf;
+    }
+    const reader = resp.body.getReader();
+    const chunks = []; let got = 0;
+    for(;;){
+      const {done, value} = await reader.read();
+      if(done) break;
+      chunks.push(value); got += value.length;
+      setProgress(got / total);
+    }
+    const out = new Uint8Array(got); let off = 0;
+    for(const c of chunks){ out.set(c, off); off += c.length; }
+    return out;
+  }
+
+  async function shaOk(bytes, want){
+    if(!want) return true;
+    if(!(window.crypto && crypto.subtle)) return true;   // non-secure context — skip
+    const digest = await crypto.subtle.digest('SHA-256', bytes);
+    const hex = Array.from(new Uint8Array(digest), b => b.toString(16).padStart(2, '0')).join('');
+    return hex === want;
+  }
+
+  /* ---------- map + interaction ---------- */
+  function initMap(){
+    if(map) return;
+    map = L.map('demoMap', {
+      center: CFG.CENTER, zoom: CFG.ZOOM, minZoom: CFG.MIN_ZOOM, maxZoom: CFG.MAX_ZOOM,
+      maxBounds: CFG.BBOX, maxBoundsViscosity: 1.0,
+    });
+    L.tileLayer(CFG.TILES, {
+      subdomains: CFG.TILE_SUBDOMAINS, attribution: CFG.ATTRIBUTION, maxZoom: CFG.MAX_ZOOM,
+    }).addTo(map);
+    map.on('click', e => { if(router) addWaypoint([e.latlng.lat, e.latlng.lng]); });
+    map.on('zoomstart', unDash);               // a reprojection invalidates dash lengths
+  }
+
+  function numIcon(n){
+    return L.divIcon({ className: '', html: '<div class="rr-wp">' + n + '</div>', iconSize: [24, 24], iconAnchor: [12, 12] });
+  }
+
+  function addWaypoint(ll){
+    waypoints.push(ll);
+    const m = L.marker(ll, { draggable: true, icon: numIcon(waypoints.length), title: String(waypoints.length) });
+    m.on('dragend', ()=>{
+      const i = markers.indexOf(m);
+      const p = m.getLatLng();
+      waypoints[i] = [p.lat, p.lng];
+      reroute(false);
+    });
+    m.addTo(map);
+    markers.push(m);
+    reroute(true);
+  }
+
+  function reroute(fromAdd){
+    clearRouteLine();
+    if(waypoints.length < 2){ lastRes = null; renderReadout(); return; }
+    try{
+      const t0 = performance.now();
+      const res = router.route({ waypoints: waypoints.slice(), profile });
+      lastMs = performance.now() - t0;         // the single-digit-ms proof
+      lastRes = res;
+      drawRoute(res.line);
+      renderReadout();
+    }catch(err){
+      // in practice SnapTooFar (a click in the sea); the bounds already keep
+      // us over Cyprus, this guards clicks on water inside them
+      if(fromAdd){
+        const m = markers.pop();
+        if(m) m.remove();
+        waypoints.pop();
+      }
+      lastRes = null;
+      renderReadout();
+      toast(t('toastSnap'));
+      console.warn('route:', err && err.message);
+    }
+  }
+
+  function drawRoute(line){
+    // line is [[lat, lon], …] — exactly Leaflet's [lat, lng] order, no flip
+    const color = getComputedStyle(document.documentElement)
+      .getPropertyValue(profile === 'car' ? '--accent-car' : '--accent-foot').trim() || '#7bd88f';
+    const glow  = L.polyline(line, { color, weight: 10, opacity: 0.28, interactive: false, lineCap: 'round', lineJoin: 'round' }).addTo(map);
+    const crisp = L.polyline(line, { color, weight: 3,  opacity: 0.95, interactive: false, lineCap: 'round', lineJoin: 'round' }).addTo(map);
+    routeLayers = [glow, crisp];
+    if(!reduce.matches){
+      routeLayers.forEach(pl => {
+        const el = pl.getElement && pl.getElement();   // SVG path (default renderer)
+        if(!el || !el.getTotalLength) return;
+        const len = el.getTotalLength();
+        el.style.strokeDasharray = len;
+        el.style.strokeDashoffset = len;
+        el.style.transition = 'stroke-dashoffset .9s cubic-bezier(.4,.05,.2,1)';
+        requestAnimationFrame(()=> requestAnimationFrame(()=>{ el.style.strokeDashoffset = '0'; }));
+      });
+      setTimeout(unDash, 1000);                // leave clean strokes once drawn
+    }
+  }
+
+  function unDash(){
+    routeLayers.forEach(pl => {
+      const el = pl.getElement && pl.getElement();
+      if(!el) return;
+      el.style.transition = ''; el.style.strokeDasharray = ''; el.style.strokeDashoffset = '';
+    });
+  }
+
+  function clearRouteLine(){
+    routeLayers.forEach(pl => pl.remove());
+    routeLayers = [];
+  }
+
+  function renderReadout(){
+    if(!lastRes){
+      distEl.textContent = '—'; timeEl.textContent = '—'; chipEl.hidden = true;
+      return;
+    }
+    const m = lastRes.meters;
+    distEl.textContent = m < 1000 ? Math.round(m) + ' m' : (m / 1000).toFixed(2) + ' km';
+    timeEl.textContent = (lastMs < 10 ? lastMs.toFixed(1) : String(Math.round(lastMs))) + ' ms';
+    chipEl.textContent = lastRes.fallback ? t('chipFallback') : t('chipRoads');
+    chipEl.classList.toggle('fallback', !!lastRes.fallback);
+    chipEl.hidden = false;
+  }
+
+  function toast(msg){
+    toastEl.textContent = msg;
+    toastEl.hidden = false;
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(()=>{ toastEl.hidden = true; }, 3500);
+  }
+
+  /* profile toggle — recolors and reroutes */
+  $('demoProfile').addEventListener('click', e => {
+    const btn = e.target.closest('.seg');
+    if(!btn || btn.dataset.profile === profile) return;
+    profile = btn.dataset.profile;
+    document.querySelectorAll('#demoProfile .seg').forEach(b => b.classList.toggle('active', b === btn));
+    reroute(false);
+  });
+
+  $('demoClearBtn').addEventListener('click', ()=>{
+    markers.forEach(m => m.remove());
+    markers.length = 0; waypoints.length = 0;
+    lastRes = null;
+    clearRouteLine();
+    renderReadout();
+  });
+
+  /* language switch: re-render the strings the switcher can't reach */
+  window.addEventListener('rr-lang', ()=>{ renderReadout(); });
 })();
 </script>
 </body>

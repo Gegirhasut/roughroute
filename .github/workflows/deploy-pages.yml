@@ -1,0 +1,88 @@
+# Build and publish the GitHub Pages landing site (design-gh-page/) to the
+# gh-pages branch, which the repo's Pages settings already serve.
+#
+# The live demo on the page needs three things next to index.html, all staged
+# here so the demo updates automatically:
+#   pkg/          — the wasm-pack --target web build of crates/wasm
+#   cyprus.graph  — the demo region graph, copied from the graphs-v3 release.
+#                   Release-asset URLs send no CORS headers (verified: neither
+#                   the github.com 302 nor release-assets.githubusercontent.com
+#                   answers an Origin), so the browser can ONLY fetch the graph
+#                   same-origin — shipping it inside the site is the fix, not
+#                   an optimization.
+#   index.json    — same-origin copy of the release index; the demo resolves
+#                   the graph's sha256 + exact byte size from it.
+#
+# gh-pages is a generated snapshot of design-gh-page/ on main (force-pushed
+# each deploy) — edit the page on main, never on gh-pages.
+name: Deploy landing page (GitHub Pages)
+
+on:
+  push:
+    branches: [main]
+    # the page itself, the wasm shell, the core it wraps, or this workflow
+    paths:
+      - 'design-gh-page/**'
+      - 'crates/wasm/**'
+      - 'crates/core/**'
+      - '.github/workflows/deploy-pages.yml'
+  workflow_dispatch:
+
+# Deploys are idempotent snapshots of main — the newest wins, so cancel
+# rather than queue (unlike the release publisher, which must not cancel).
+concurrency:
+  group: deploy-pages
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+env:
+  RELEASE_TAG: graphs-v3
+  DEMO_REGION: cyprus
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Same pinned-toolchain action as build-regions.yml (reads
+      # rust-toolchain.toml), plus the wasm target the demo build needs.
+      - name: Install pinned Rust toolchain + cache
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          target: wasm32-unknown-unknown
+
+      - name: Install wasm-pack
+        run: curl -sSf https://rustwasm.github.io/wasm-pack/installer/init.sh | sh
+
+      # --out-dir is resolved relative to the crate, so anchor it to the
+      # workspace. Output: pkg/roughroute_wasm.js + roughroute_wasm_bg.wasm.
+      - name: Build the WASM module
+        run: wasm-pack build crates/wasm --release --target web --out-dir "$GITHUB_WORKSPACE/design-gh-page/pkg"
+
+      - name: Stage the demo graph + index (same-origin copies)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh release download "$RELEASE_TAG" \
+            --pattern "${DEMO_REGION}.graph" --pattern index.json \
+            --dir design-gh-page --clobber
+          # wasm-pack writes pkg/.gitignore with '*' — it would empty the
+          # publish commit below.
+          rm -f design-gh-page/pkg/.gitignore
+
+      - name: Publish design-gh-page/ to the gh-pages branch
+        run: |
+          set -euo pipefail
+          cd design-gh-page
+          touch .nojekyll
+          git init -q -b gh-pages
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -qm "Deploy landing page + demo (source ${GITHUB_SHA::7})"
+          git push -f "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${GITHUB_REPOSITORY}.git" gh-pages
