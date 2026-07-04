@@ -985,40 +985,67 @@ window.__rrLang = 'en';   // current UI language; runtime-generated strings (dem
   function addWaypoint(ll){
     waypoints.push(ll);
     const m = L.marker(ll, { draggable: true, icon: numIcon(waypoints.length), title: String(waypoints.length) });
+    m.on('dragstart', ()=>{ m._rrPreDrag = m.getLatLng(); });   // kept for failure revert
     m.on('dragend', ()=>{
       const i = markers.indexOf(m);
       const p = m.getLatLng();
       waypoints[i] = [p.lat, p.lng];
-      reroute(false);
+      tryRoute(()=>{             // drag failed: snap back, never delete the marker
+        m.setLatLng(m._rrPreDrag);
+        waypoints[i] = [m._rrPreDrag.lat, m._rrPreDrag.lng];
+      });
     });
     m.addTo(map);
     markers.push(m);
-    reroute(true);
+    tryRoute(()=>{               // add failed: drop the just-added point entirely
+      markers.pop().remove();
+      waypoints.pop();
+    });
   }
 
-  function reroute(fromAdd){
-    clearRouteLine();
-    if(waypoints.length < 2){ lastRes = null; renderReadout(); return; }
+  /* success replaces the drawn route; failure runs `revert` and leaves the
+     current route (and its readout) untouched — one bad waypoint must never
+     destroy a valid N-point route. router.route() is all-or-nothing, so the
+     old line is cleared only once a replacement is in hand. */
+  function tryRoute(revert){
+    if(waypoints.length < 2){
+      // genuinely no route possible — the only path that may clear a line
+      lastRes = null;
+      clearRouteLine();
+      renderReadout();
+      return;
+    }
+    let res, ms;
     try{
       const t0 = performance.now();
-      const res = router.route({ waypoints: waypoints.slice(), profile });
-      lastMs = performance.now() - t0;         // the single-digit-ms proof
-      lastRes = res;
-      drawRoute(res.line);
-      renderReadout();
+      res = router.route({ waypoints: waypoints.slice(), profile });
+      ms = performance.now() - t0;             // the single-digit-ms proof
     }catch(err){
       // in practice SnapTooFar (a click in the sea); the bounds already keep
       // us over Cyprus, this guards clicks on water inside them
-      if(fromAdd){
-        const m = markers.pop();
-        if(m) m.remove();
-        waypoints.pop();
-      }
-      lastRes = null;
-      renderReadout();
+      if(revert) revert();
       toast(t('toastSnap'));
+      flashBadMarker(err);
       console.warn('route:', err && err.message);
+      return;                                  // drawn route + readout stay as-is
     }
+    lastMs = ms; lastRes = res;
+    clearRouteLine();
+    drawRoute(res.line);
+    renderReadout();
+  }
+
+  /* the core names the offender ("waypoint 2 is too far from any usable
+     road…") — briefly flash that marker if it survived the revert */
+  function flashBadMarker(err){
+    const hit = /waypoint (\d+)/.exec((err && err.message) || '');
+    if(!hit) return;
+    const mk = markers[Number(hit[1])];
+    const el = mk && mk.getElement && mk.getElement();
+    const wp = el && el.querySelector('.rr-wp');
+    if(!wp) return;
+    wp.style.background = 'var(--danger)';
+    setTimeout(()=>{ wp.style.background = ''; }, 900);
   }
 
   function drawRoute(line){
@@ -1081,7 +1108,7 @@ window.__rrLang = 'en';   // current UI language; runtime-generated strings (dem
     if(!btn || btn.dataset.profile === profile) return;
     profile = btn.dataset.profile;
     document.querySelectorAll('#demoProfile .seg').forEach(b => b.classList.toggle('active', b === btn));
-    reroute(false);
+    tryRoute(null);   // a failed re-profile keeps the old route on screen too
   });
 
   $('demoClearBtn').addEventListener('click', ()=>{
