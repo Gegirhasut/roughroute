@@ -1152,6 +1152,9 @@ window.__rrLang = 'en';   // current UI language; runtime-generated strings (dem
   const INDEX = './index.json';
   const RELEASE = 'https://github.com/Gegirhasut/roughroute/releases/download/graphs-v3/';
   const FEATURED = ['cyprus', 'us-california', 'germany', 'switzerland', 'france', 'kenya'];
+  // Always shown last in the expanded ("Show all") view, regardless of size,
+  // and never used to fill a featured slot. Renders once index.json carries it.
+  const PIN_LAST = ['italy'];
 
   /* dynamic strings (N is runtime; toggle state flips) — rendered on the
      switcher's rr-lang event, like the demo's runtime dict */
@@ -1199,7 +1202,9 @@ window.__rrLang = 'en';   // current UI language; runtime-generated strings (dem
       if(r){ picked.push(r); used.add(r.id); } else { missing.push(id); }
     }
     if(picked.length < 6){
-      const rest = regions.filter(r => !used.has(r.id)).sort((a, b) => b.bytes - a.bytes);
+      const rest = regions
+        .filter(r => !used.has(r.id) && !PIN_LAST.includes(r.id))
+        .sort((a, b) => b.bytes - a.bytes);
       for(const r of rest){ if(picked.length >= 6) break; picked.push(r); used.add(r.id); }
     }
     if(missing.length) console.info('regions: featured not in index.json, slots filled by size:', missing.join(', '));
@@ -1211,8 +1216,14 @@ window.__rrLang = 'en';   // current UI language; runtime-generated strings (dem
     if(expanded){
       const six = featuredSix();
       const seen = new Set(six.map(r => r.id));
-      const rest = regions.filter(r => !seen.has(r.id)).sort((a, b) => b.bytes - a.bytes);
-      list = six.concat(rest);         // featured first (curated order), then the rest by size
+      const rest = regions
+        .filter(r => !seen.has(r.id) && !PIN_LAST.includes(r.id))
+        .sort((a, b) => b.bytes - a.bytes);
+      // pinned regions (e.g. Italy) always come last, in PIN_LAST order
+      const pinned = PIN_LAST
+        .map(id => regions.find(r => r.id === id && !seen.has(r.id)))
+        .filter(Boolean);
+      list = six.concat(rest, pinned);   // featured, then the rest by size, then pinned last
     }else{
       list = featuredSix();
     }
