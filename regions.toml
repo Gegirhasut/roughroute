@@ -103,3 +103,8 @@ pbf_url = "https://download.geofabrik.de/europe/france-latest.osm.pbf"
 id = "russia"
 name = "Russia"
 pbf_url = "https://download.geofabrik.de/russia-latest.osm.pbf"
+
+[[region]]
+id = "us-california"
+name = "California, USA"
+pbf_url = "https://download.geofabrik.de/north-america/us/california-latest.osm.pbf"
