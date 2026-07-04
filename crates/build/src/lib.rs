@@ -36,10 +36,15 @@ use roughroute_core::GraphError;
 pub enum BuildError {
     /// The road network exceeds the format's `u32` node/edge indices.
     TooLarge,
-    /// The region's longitude span exceeds 180° — it crosses the antimeridian
-    /// or is more than half the globe wide, which the snapping projection does
-    /// not support. Not a code fault: such regions are out of scope for v1.
+    /// The region's longitude span exceeds 180° in *both* the standard and
+    /// the seam-wrapped frame (D25) — it is genuinely more than half the
+    /// globe wide (or scattered junk), not an antimeridian crossing. Not a
+    /// code fault: such regions are out of scope.
     AntimeridianSpanning,
+    /// The region crosses the antimeridian but overhangs it by more than
+    /// ~30° on *both* sides, so its shifted longitude frame (D25) will not
+    /// fit the fixed-point `i32` domain. No real regional extract does this.
+    AntimeridianWindow,
     /// The assembled graph failed `roughroute-core` validation (indicates a
     /// bug in this crate rather than bad input).
     Graph(GraphError),
@@ -55,7 +60,14 @@ impl core::fmt::Display for BuildError {
             }
             BuildError::AntimeridianSpanning => write!(
                 f,
-                "region spans more than 180° of longitude (crosses the antimeridian?) — unsupported"
+                "region spans more than 180° of longitude in every frame — more than half the \
+                 globe wide, unsupported (a genuine antimeridian crossing would be narrow after \
+                 wrapping; docs/DECISIONS.md D25)"
+            ),
+            BuildError::AntimeridianWindow => write!(
+                f,
+                "region crosses the antimeridian but extends more than ~30° past it on both \
+                 sides — its shifted longitude frame cannot fit fixed-point i32 (D25)"
             ),
             BuildError::Graph(e) => write!(f, "graph assembly failed: {e}"),
             BuildError::Pbf(e) => write!(f, "failed to read .osm.pbf: {e}"),

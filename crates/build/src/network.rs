@@ -72,6 +72,14 @@ pub struct BuildStats {
     /// Chains that left and re-entered the same kept node (P-loops): dropped,
     /// see D13.
     pub loop_chains_dropped: u64,
+    /// Antimeridian seam stitches (D25): nodes merged into a coincident
+    /// partner at exactly ±180° longitude. OSM ways cannot cross the
+    /// antimeridian, so mappers split roads there with two coincident end
+    /// nodes (distinct ids, one per side); id-based dedup (D1) cannot join
+    /// them, so they are merged by exact coordinate — without this the
+    /// graph falls apart precisely at the seam (verified on Fiji: 4 such
+    /// pairs). Always 0 for non-crossing regions.
+    pub seam_nodes_merged: u64,
 }
 
 /// The compact in-memory road network (`docs/DECISIONS.md` D23): the same
@@ -244,20 +252,119 @@ pub fn build_graph_compact_with_options(
     drop(node_ids);
     drop(node_coords);
 
-    // Reject a region whose longitude span exceeds 180°: it either crosses the
-    // antimeridian or is more than half the globe wide. The snapping
-    // projection (a local equirectangular frame) is wrong across the ±180°
-    // seam, so building such a region would silently misroute near it. Fail
-    // loudly instead — full antimeridian support is out of scope (see the
-    // "Known limitations" note in the README / docs/DECISIONS.md).
+    // A region whose longitude span exceeds 180° either genuinely crosses
+    // the ±180° antimeridian or is more than half the globe wide. Crossing
+    // regions are re-expressed in a *shifted continuous* longitude frame
+    // (D25) so the bbox, grid, and snapping projection never see the seam;
+    // genuinely-too-wide data is still rejected. Regions that pass the span
+    // check take this branch's `false` arm — i.e. exactly the pre-D25 code
+    // path, byte-identical output by construction.
+    let mut lon_shifted = false;
+    // Seam stitch bookkeeping (D25): `(position, canonical position)` pairs,
+    // in the *pre-removal* numbering, sorted by position. Empty for every
+    // non-crossing region.
+    let mut merged_away: Vec<(u32, u32)> = Vec::new();
     if let (Some(min_lon), Some(max_lon)) =
         (nodes.iter().map(|n| n[1]).min(), nodes.iter().map(|n| n[1]).max())
     {
-        // 180° in fixed-point 1e7.
-        if (max_lon as i64 - min_lon as i64) > 1_800_000_000 {
-            return Err(BuildError::AntimeridianSpanning);
+        // 180° / 360° in fixed-point 1e7.
+        const HALF_TURN: i64 = 1_800_000_000;
+        const FULL_TURN: i64 = 3_600_000_000;
+        // The i32 fixed-point domain caps longitudes at ±214.7°; keep a
+        // round safety margin so the shifted frame provably fits.
+        const WINDOW: i64 = 2_100_000_000; // ±210°
+        if i64::from(max_lon) - i64::from(min_lon) > HALF_TURN {
+            // Candidate wrap: negative longitudes + 360° (an exact integer
+            // shift — no floating-point rounding anywhere). A genuine
+            // crossing region is *narrow* in this frame; junk that is wide
+            // in both frames is not an antimeridian case.
+            let wrapped =
+                |lon: i32| -> i64 { i64::from(lon) + if lon < 0 { FULL_TURN } else { 0 } };
+            let (mut wmin, mut wmax) = (i64::MAX, i64::MIN);
+            for n in nodes.iter() {
+                let w = wrapped(n[1]);
+                wmin = wmin.min(w);
+                wmax = wmax.max(w);
+            }
+            if wmax - wmin > HALF_TURN {
+                return Err(BuildError::AntimeridianSpanning);
+            }
+            // Recenter westward when the wrapped frame overflows the i32
+            // window (an Alaska-style region mostly east of the seam).
+            let offset = if wmax > WINDOW { -FULL_TURN } else { 0 };
+            if wmin + offset < -WINDOW {
+                // Overhangs the seam by ≳30° on both sides — no real
+                // extract does; refuse rather than overflow fixed-point.
+                return Err(BuildError::AntimeridianWindow);
+            }
+            for n in nodes.iter_mut() {
+                // Fits i32: |value| ≤ WINDOW < i32::MAX by the checks above.
+                n[1] = (wrapped(n[1]) + offset) as i32;
+            }
+            lon_shifted = true;
+
+            // Seam stitch: OSM ways cannot cross the antimeridian, so
+            // mappers split roads at ±180° with two *coincident* end nodes
+            // (distinct ids, one per side). Id-dedup (D1) cannot join them,
+            // so merge nodes coinciding exactly on the seam meridian: same
+            // lat, lon exactly ±180° — the editing convention. The lowest
+            // OSM id (= lowest position, ids ascending) is canonical, so
+            // the merge is deterministic (D3).
+            let seam_fixed = (HALF_TURN + offset) as i32;
+            let mut on_seam: Vec<(i32, u32)> = nodes
+                .iter()
+                .enumerate()
+                .filter(|(_, n)| n[1] == seam_fixed)
+                .map(|(i, n)| (n[0], i as u32))
+                .collect();
+            on_seam.sort_unstable();
+            for pair in on_seam.windows(2) {
+                if pair[0].0 == pair[1].0 {
+                    // Same lat: merge the later node into the earlier one
+                    // (which may itself be the canonical head of a run).
+                    let canon = merged_away
+                        .last()
+                        .filter(|&&(p, _)| p == pair[0].1)
+                        .map_or(pair[0].1, |&(_, c)| c);
+                    merged_away.push((pair[1].1, canon));
+                }
+            }
+            stats.seam_nodes_merged = merged_away.len() as u64;
+            // The group scan above orders by (lat, position); the redirect
+            // lookups and the removal sweep below need position order.
+            merged_away.sort_unstable();
+            // Remove the merged-away nodes from the universe (they must not
+            // remain as isolated snap targets); `ids` keeps every entry so
+            // the merged ids still resolve, via the redirect in `lookup`.
+            if !merged_away.is_empty() {
+                let mut r = 0usize;
+                let mut w = 0usize;
+                for i in 0..nodes.len() {
+                    if r < merged_away.len() && merged_away[r].0 as usize == i {
+                        r += 1;
+                        continue;
+                    }
+                    nodes[w] = nodes[i];
+                    w += 1;
+                }
+                nodes.truncate(w);
+            }
         }
     }
+
+    // Resolve an OSM id to its final graph node index: rank in `ids`, then
+    // the D25 seam redirect (merged node → its coincident partner) and the
+    // downshift past removed slots. For non-crossing regions `merged_away`
+    // is empty and this is exactly the plain binary search it always was.
+    let lookup = |id: i64| -> Option<u32> {
+        let pos = ids.binary_search(&id).ok()? as u32;
+        let pos = match merged_away.binary_search_by_key(&pos, |&(p, _)| p) {
+            Ok(i) => merged_away[i].1,
+            Err(_) => pos,
+        };
+        let removed_before = merged_away.partition_point(|&(p, _)| p < pos) as u32;
+        Some(pos - removed_before)
+    };
 
     // 3. Directed edges, both directions per segment (v1 ignores `oneway`).
     //    Same scan and predicate as step 1; a pair is valid there iff both
@@ -274,10 +381,12 @@ pub fn build_graph_compact_with_options(
             if a == b {
                 continue;
             }
-            let (Ok(ai), Ok(bi)) = (ids.binary_search(&a), ids.binary_search(&b)) else {
+            let (Some(ai), Some(bi)) = (lookup(a), lookup(b)) else {
                 continue;
             };
-            let (ai, bi) = (ai as u32, bi as u32);
+            if ai == bi {
+                continue; // seam-stitched partners (D25): no self-edge
+            }
             let [alat, alon] = nodes[ai as usize];
             let [blat, blon] = nodes[bi as usize];
             // Coordinates were quantized to the on-disk fixed-point
@@ -295,7 +404,10 @@ pub fn build_graph_compact_with_options(
             directed.push((bi, ai, length_dm, access));
         }
     }
-    stats.nodes_before_collapse = ids.len() as u64;
+    // Post seam-stitch count: `nodes` is the true universe; `ids` may keep
+    // merged-away entries so their refs still resolve (identical for every
+    // non-crossing region).
+    stats.nodes_before_collapse = nodes.len() as u64;
     // The ways and the id table are no longer needed: only index-based data
     // from here on (D23 consume-and-free).
     drop(way_refs);
@@ -555,7 +667,9 @@ pub fn build_graph_compact_with_options(
     }
     let edges: Vec<Edge> = directed_v2.into_iter().map(|(_, e)| e).collect();
 
-    let graph = Graph::from_parts(new_nodes, offsets, edges, geometry)?;
+    let flags =
+        if lon_shifted { roughroute_core::format::HEADER_FLAG_LON_SHIFTED } else { 0 };
+    let graph = Graph::from_parts_with_flags(flags, new_nodes, offsets, edges, geometry)?;
     Ok((graph, stats))
 }
 
@@ -570,12 +684,95 @@ mod tests {
     }
 
     #[test]
-    fn antimeridian_spanning_region_is_rejected() {
-        // A way from +179° to -179° spans ~358° of longitude: refuse it
-        // rather than build a graph the snapping projection misroutes near.
+    fn antimeridian_crossing_region_builds_in_shifted_frame() {
+        // A way from +179° to -179° naively spans ~358° of longitude but is
+        // a genuine 2°-wide seam crossing: since D25 it builds in a shifted
+        // continuous frame instead of being rejected.
         let ways = vec![RawWay { node_ids: vec![10, 20], access: ACCESS_ALL }];
         let coords = coords(&[(10, 51.0, 179.0), (20, 51.0, -179.0)]);
+        let (g, _) = build_graph(&ways, &coords).unwrap();
+        assert!(g.lon_shifted());
+        // bbox is monotonic in the shifted frame: [179°, 181°].
+        let bb = g.bbox();
+        assert!((bb.min_lon - 179.0).abs() < 1e-9 && (bb.max_lon - 181.0).abs() < 1e-9);
+        // Public node coordinates are normalized back to [-180, 180].
+        let lons: Vec<f64> = (0..g.node_count()).map(|i| g.node_latlon(i)[1]).collect();
+        assert!(lons.iter().all(|&l| (-180.0..=180.0).contains(&l)), "{lons:?}");
+        // The edge is measured across the seam (~2° of lon at 51°N ≈ 140 km),
+        // not the wrong way around the globe (~358° ≈ 25,000 km).
+        let e = &g.edges_from(0)[0];
+        assert!((1_300_000..1_500_000).contains(&e.length_dm), "{}", e.length_dm);
+        // And the graph round-trips through its bytes with the flag intact.
+        let loaded = roughroute_core::Graph::from_bytes(&g.to_bytes()).unwrap();
+        assert!(loaded.lon_shifted());
+        assert_eq!(loaded.to_bytes(), g.to_bytes());
+    }
+
+    #[test]
+    fn seam_split_ways_are_stitched_across_the_antimeridian() {
+        // The OSM editing convention: a road crossing 180° is split into two
+        // ways with *coincident but distinct* end nodes (ids 3 and 4 here —
+        // same physical point, one node per side). Id-dedup alone would
+        // leave the graph disconnected exactly at the seam; the D25 stitch
+        // must merge them so routing crosses.
+        let ways = vec![
+            RawWay { node_ids: vec![1, 2, 3], access: ACCESS_ALL }, // west half, ends at +180°
+            RawWay { node_ids: vec![4, 5, 6], access: ACCESS_ALL }, // east half, starts at −180°
+        ];
+        let coords = coords(&[
+            (1, -16.80, 179.96),
+            (2, -16.80, 179.98),
+            (3, -16.80, 180.0),
+            (4, -16.80, -180.0),
+            (5, -16.80, -179.98),
+            (6, -16.80, -179.96),
+        ]);
+        let (g, stats) = build_graph(&ways, &coords).unwrap();
+        assert!(g.lon_shifted());
+        assert_eq!(stats.seam_nodes_merged, 1);
+        // One continuous degree-2 chain end to end: 2 kept nodes, and the
+        // merged seam point lives on as edge geometry.
+        assert_eq!(g.node_count(), 2);
+        let router = Router::new(&g, RouteOptions::default());
+        let res = router.route(&[[-16.80, 179.96], [-16.80, -179.96]]).unwrap();
+        assert!(!res.fallback, "the stitched seam must be routable");
+        // 0.08° of lon at 16.8°S ≈ 8.5 km — the short way across the seam.
+        assert!((8_000.0..9_000.0).contains(&res.meters), "meters = {}", res.meters);
+        assert!(res.line.iter().all(|p| (-180.0..=180.0).contains(&p[1])));
+    }
+
+    #[test]
+    fn genuinely_wide_region_is_still_rejected() {
+        // Data wide in BOTH frames (spread across ~200° through Greenwich —
+        // points near 0° make the wrapped frame just as wide): not an
+        // antimeridian case, refuse as before.
+        let ways = vec![RawWay { node_ids: vec![10, 20, 30], access: ACCESS_ALL }];
+        let coords = coords(&[(10, 51.0, -95.0), (20, 51.0, 0.0), (30, 51.0, 100.0)]);
         assert!(matches!(build_graph(&ways, &coords), Err(BuildError::AntimeridianSpanning)));
+    }
+
+    #[test]
+    fn seam_overhang_beyond_the_i32_window_is_rejected() {
+        // Two clusters 190° apart whose tight window runs through the seam
+        // but sticks out more than ~30° on both sides of ±180°: the shifted
+        // frame cannot fit fixed-point i32, refuse with the specific error.
+        let ways = vec![RawWay { node_ids: vec![10, 20], access: ACCESS_ALL }];
+        let coords = coords(&[(10, 51.0, 140.0), (20, 51.0, -50.0)]);
+        assert!(matches!(build_graph(&ways, &coords), Err(BuildError::AntimeridianWindow)));
+    }
+
+    #[test]
+    fn alaska_style_crossing_recenters_west() {
+        // Mostly east of the seam (172°E .. -130°W): the wrapped frame
+        // [172°, 230°] overflows the +210° window, so it recenters to
+        // [-188°, -130°] — bbox min_lon < -180 signals the wrap.
+        let ways = vec![RawWay { node_ids: vec![10, 20], access: ACCESS_ALL }];
+        let coords = coords(&[(10, 60.0, 172.0), (20, 60.0, -130.0)]);
+        let (g, _) = build_graph(&ways, &coords).unwrap();
+        assert!(g.lon_shifted());
+        let bb = g.bbox();
+        assert!((bb.min_lon + 188.0).abs() < 1e-9, "{}", bb.min_lon);
+        assert!((bb.max_lon + 130.0).abs() < 1e-9, "{}", bb.max_lon);
     }
 
     #[test]

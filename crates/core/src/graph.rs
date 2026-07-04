@@ -125,6 +125,21 @@ impl Graph {
         edges: Vec<Edge>,
         geometry: Vec<[i32; 2]>,
     ) -> Result<Graph, GraphError> {
+        Self::from_parts_with_flags(0, nodes, offsets, edges, geometry)
+    }
+
+    /// [`Graph::from_parts`] with explicit header flags — the builder's
+    /// entry point for antimeridian-crossing regions (D25), which set
+    /// [`crate::format::HEADER_FLAG_LON_SHIFTED`] and store longitudes in a
+    /// shifted continuous frame. Unknown flag bits are rejected exactly as
+    /// on load.
+    pub fn from_parts_with_flags(
+        flags: u16,
+        nodes: Vec<[i32; 2]>,
+        offsets: Vec<u32>,
+        edges: Vec<Edge>,
+        geometry: Vec<[i32; 2]>,
+    ) -> Result<Graph, GraphError> {
         // The delta-encoded geometry section's byte length is a `u32` header
         // field (`geo_bytes`). Reject a pool that would encode past that so
         // `to_bytes` can never silently truncate it. Only checked here, on
@@ -146,7 +161,7 @@ impl Graph {
                 bbox_fixed[3] = bbox_fixed[3].max(*lon);
             }
         }
-        Self::assemble(format::Parts { flags: 0, bbox_fixed, nodes, offsets, edges, geometry })
+        Self::assemble(format::Parts { flags, bbox_fixed, nodes, offsets, edges, geometry })
     }
 
     /// Validate all semantic invariants and construct the graph + snapping
@@ -154,12 +169,14 @@ impl Graph {
     fn assemble(parts: format::Parts) -> Result<Graph, GraphError> {
         let format::Parts { flags, bbox_fixed, nodes, offsets, edges, geometry } = parts;
 
-        // v2 defines no header flag bits; refusing unknown ones keeps forward
-        // compatibility honest (a file that needs a feature we lack fails
-        // loudly instead of routing wrongly).
-        if flags != 0 {
+        // The only defined header flag is LON_SHIFTED (D25); refusing unknown
+        // ones keeps forward compatibility honest (a file that needs a
+        // feature we lack fails loudly instead of routing wrongly) — and is
+        // exactly what makes pre-D25 readers refuse a shifted graph cleanly.
+        if flags & !format::HEADER_FLAG_LON_SHIFTED != 0 {
             return Err(GraphError::Malformed("unknown flags bits set"));
         }
+        let shifted = flags & format::HEADER_FLAG_LON_SHIFTED != 0;
         if nodes.len() > u32::MAX as usize - 1
             || edges.len() > u32::MAX as usize
             || geometry.len() > u32::MAX as usize
@@ -184,9 +201,24 @@ impl Graph {
         if min_lat > max_lat || min_lon > max_lon {
             return Err(GraphError::Malformed("inverted bbox"));
         }
+        if shifted {
+            // D25 canonical form for a lon-shifted graph: the frame is still
+            // monotonic and at most 180° wide, and it must genuinely stick
+            // out past ±180° — a flag with no wrap would make the flag
+            // meaningless (same discipline as geometry-less edge flags).
+            if i64::from(max_lon) - i64::from(min_lon) > 1_800_000_000 {
+                return Err(GraphError::Malformed("shifted bbox spans more than 180° of longitude"));
+            }
+            if min_lon >= -1_800_000_000 && max_lon <= 1_800_000_000 {
+                return Err(GraphError::Malformed("lon-shifted flag set but bbox does not cross ±180°"));
+            }
+        }
+        // For a shifted graph the absolute ±180° longitude bound doesn't
+        // apply (that's the point of the frame); bbox containment still does,
+        // and the i32 fixed-point domain bounds the frame at ±214.7°.
         let coord_ok = |&[lat, lon]: &[i32; 2]| {
             (-900_000_000..=900_000_000).contains(&lat)
-                && (-1_800_000_000..=1_800_000_000).contains(&lon)
+                && (shifted || (-1_800_000_000..=1_800_000_000).contains(&lon))
                 && lat >= min_lat
                 && lat <= max_lat
                 && lon >= min_lon
@@ -245,6 +277,12 @@ impl Graph {
 
     /// The graph's bounding box in degrees, as stored in the file header
     /// (covers nodes and edge geometry).
+    ///
+    /// For an antimeridian-crossing graph ([`Graph::lon_shifted`], D25) the
+    /// box is reported in the graph's shifted continuous frame so it stays
+    /// monotonic: `max_lon` may exceed 180° (or `min_lon` fall below −180°).
+    /// A point is inside iff its latitude is in range and its longitude
+    /// *or* `longitude ± 360°` lies in `[min_lon, max_lon]`.
     pub fn bbox(&self) -> BBox {
         BBox {
             min_lat: geo::fixed_to_deg(self.bbox_fixed[0]),
@@ -252,6 +290,30 @@ impl Graph {
             max_lat: geo::fixed_to_deg(self.bbox_fixed[2]),
             max_lon: geo::fixed_to_deg(self.bbox_fixed[3]),
         }
+    }
+
+    /// `true` when this graph's region crosses the ±180° antimeridian and
+    /// its longitudes are therefore stored in a shifted continuous frame
+    /// (header flag [`crate::format::HEADER_FLAG_LON_SHIFTED`], D25).
+    /// Queries accept either longitude form and results are normalized back
+    /// to `[-180°, 180°]`; only [`Graph::bbox`] speaks the shifted frame.
+    pub fn lon_shifted(&self) -> bool {
+        self.flags & format::HEADER_FLAG_LON_SHIFTED != 0
+    }
+
+    /// Normalize a query longitude into the graph's coordinate frame (D25):
+    /// for a lon-shifted graph, pick the ±360° representation closest to the
+    /// bbox longitude center, so `-170°` and `190°` (the same meridian) snap
+    /// identically. Identity for normal graphs and NaN.
+    fn normalize_query_lon(&self, lon: f64) -> f64 {
+        if !self.lon_shifted() {
+            return lon;
+        }
+        let center =
+            (geo::fixed_to_deg(self.bbox_fixed[1]) + geo::fixed_to_deg(self.bbox_fixed[3])) / 2.0;
+        // Wrap (lon - center) into [-180, 180): one formula, no ties.
+        let d = (lon - center).rem_euclid(360.0);
+        center + if d >= 180.0 { d - 360.0 } else { d }
     }
 
     /// Number of nodes in the graph.
@@ -269,14 +331,16 @@ impl Graph {
         self.geometry.len() as u32
     }
 
-    /// Coordinates of node `index` as `[lat, lon]` degrees.
+    /// Coordinates of node `index` as `[lat, lon]` degrees, longitude always
+    /// in `[-180°, 180°]` (normalized out of the shifted frame for
+    /// antimeridian-crossing graphs, D25).
     ///
     /// `index` must be `< node_count()`; passing an out-of-range index is a
     /// caller bug and will panic (all indices stored in the graph itself are
     /// validated at load).
     pub fn node_latlon(&self, index: u32) -> [f64; 2] {
         let [lat, lon] = self.nodes[index as usize];
-        [geo::fixed_to_deg(lat), geo::fixed_to_deg(lon)]
+        [geo::fixed_to_deg(lat), geo::wrap_lon_deg(geo::fixed_to_deg(lon))]
     }
 
     /// Outgoing edges of node `index` (same range contract as
@@ -321,7 +385,7 @@ impl Graph {
     /// and `None` means nothing was found within the search bound. Distance
     /// ties break toward the smaller node index (determinism F9).
     pub fn nearest_node(&self, lat: f64, lon: f64, max_meters: f64) -> Option<(u32, f64)> {
-        self.grid.nearest(&self.nodes, lat, lon, max_meters)
+        self.grid.nearest(&self.nodes, lat, self.normalize_query_lon(lon), max_meters)
     }
 
     /// Nearest point *on a road* to `(lat, lon)` (degrees), as
@@ -333,7 +397,10 @@ impl Graph {
     /// is never farther than [`Graph::nearest_node`]'s result. `max_meters`
     /// bounds the search effort exactly as in `nearest_node`.
     pub fn nearest_road(&self, lat: f64, lon: f64, max_meters: f64) -> Option<([f64; 2], f64)> {
-        self.road_snap(lat, lon, max_meters, ACCESS_ALL).map(|s| (s.point, s.meters))
+        // The snap point is produced in the graph's frame; hand the caller
+        // real-world coordinates (D25 boundary normalization).
+        self.road_snap(lat, lon, max_meters, ACCESS_ALL)
+            .map(|s| ([s.point[0], geo::wrap_lon_deg(s.point[1])], s.meters))
     }
 
     /// Full edge-snap result for the router (edge, segment, `t`, point,
@@ -346,13 +413,16 @@ impl Graph {
         max_meters: f64,
         access_mask: u8,
     ) -> Option<crate::grid::RoadSnap> {
+        // Queries enter the graph's frame here (D25): every caller — the
+        // router's waypoints included — funnels through this normalization,
+        // and the returned snap stays in-frame for internal use.
         self.grid.nearest_segment(
             &self.nodes,
             &self.offsets,
             &self.edges,
             &self.geometry,
             lat,
-            lon,
+            self.normalize_query_lon(lon),
             max_meters,
             access_mask,
         )
@@ -513,6 +583,96 @@ mod tests {
         let g2 = Graph::from_bytes(&bytes).unwrap();
         assert_eq!(g2.node_count(), 0);
         assert_eq!(g2.nearest_node(35.0, 33.0, 1e9), None);
+    }
+
+    /// A two-node road straddling the ±180° seam, stored in the shifted
+    /// frame (D25): lons 179.99° and 180.01° (real-world −179.99°).
+    fn seam_graph() -> Graph {
+        let nodes = vec![[510_000_000, 1_799_900_000], [510_000_000, 1_800_100_000]];
+        let offsets = vec![0, 1, 2];
+        let edges = vec![plain(1, 14_000, 0b11), plain(0, 14_000, 0b11)];
+        Graph::from_parts_with_flags(
+            crate::format::HEADER_FLAG_LON_SHIFTED,
+            nodes,
+            offsets,
+            edges,
+            vec![],
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn lon_shifted_graph_round_trips_and_normalizes_its_boundary() {
+        let g = seam_graph();
+        assert!(g.lon_shifted());
+        // bbox stays in the shifted frame (monotonic, max_lon > 180).
+        assert!((g.bbox().max_lon - 180.01).abs() < 1e-9);
+        // Public node coords are real-world.
+        assert!((g.node_latlon(1)[1] - (-179.99)).abs() < 1e-9);
+        // Bytes round-trip with the flag intact.
+        let loaded = Graph::from_bytes(&g.to_bytes()).unwrap();
+        assert!(loaded.lon_shifted());
+        assert_eq!(loaded.to_bytes(), g.to_bytes());
+    }
+
+    #[test]
+    fn queries_snap_identically_from_both_longitude_forms() {
+        let g = seam_graph();
+        // The same physical point expressed as −179.995° and 180.005°.
+        let a = g.nearest_road(51.0001, -179.995, 5_000.0).unwrap();
+        let b = g.nearest_road(51.0001, 180.005, 5_000.0).unwrap();
+        assert_eq!(a, b);
+        assert!(a.1 < 100.0, "snap should land on the road: {} m", a.1);
+        // The returned point is real-world.
+        assert!((-180.0..=180.0).contains(&a.0[1]), "{:?}", a.0);
+        // nearest_node accepts both forms too.
+        assert_eq!(
+            g.nearest_node(51.0, -179.99, 5_000.0).map(|(i, _)| i),
+            g.nearest_node(51.0, 180.01, 5_000.0).map(|(i, _)| i),
+        );
+        // A west-of-seam query snaps to the western node, not across.
+        assert_eq!(g.nearest_node(51.0, 179.99, 5_000.0).map(|(i, _)| i), Some(0));
+    }
+
+    #[test]
+    fn lon_shifted_flag_validation_is_strict() {
+        let nodes_in_range = vec![fx(51.0, 179.0), fx(51.0, 179.5)];
+        // Flag set but nothing crosses ±180°: non-canonical, refused.
+        let r = Graph::from_parts_with_flags(
+            crate::format::HEADER_FLAG_LON_SHIFTED,
+            nodes_in_range.clone(),
+            vec![0, 1, 2],
+            vec![plain(1, 10, 0b11), plain(0, 10, 0b11)],
+            vec![],
+        );
+        assert!(matches!(r, Err(GraphError::Malformed(_))));
+        // Unknown header flag bits (bit1) are still refused.
+        let r = Graph::from_parts_with_flags(
+            1 << 1,
+            nodes_in_range.clone(),
+            vec![0, 1, 2],
+            vec![plain(1, 10, 0b11), plain(0, 10, 0b11)],
+            vec![],
+        );
+        assert!(matches!(r, Err(GraphError::Malformed("unknown flags bits set"))));
+        // A shifted frame wider than 180° of longitude is refused.
+        let wide = vec![[510_000_000, -2_000_000_000], [510_000_000, 0]];
+        let r = Graph::from_parts_with_flags(
+            crate::format::HEADER_FLAG_LON_SHIFTED,
+            wide,
+            vec![0, 1, 2],
+            vec![plain(1, 10, 0b11), plain(0, 10, 0b11)],
+            vec![],
+        );
+        assert!(matches!(r, Err(GraphError::Malformed(_))));
+        // Without the flag, out-of-±180° longitudes stay refused as before.
+        let r = Graph::from_parts(
+            vec![[510_000_000, 1_800_100_000]],
+            vec![0, 0],
+            vec![],
+            vec![],
+        );
+        assert!(matches!(r, Err(GraphError::Malformed(_))));
     }
 
     #[test]

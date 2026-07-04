@@ -270,10 +270,16 @@ val res = router.route(waypoints, Profile.CAR)     // res.line, res.meters, res.
 Deliberately out of scope for v1 (see `docs/DECISIONS.md` "Known limitations"
 for the full notes and the real fix for each):
 
-- **Antimeridian-spanning regions** (Fiji, Chukotka, NZ + Chathams) are
-  **not supported**: the snapping projection is wrong across the ±180° seam,
-  so `roughroute build` refuses any region spanning more than 180° of
-  longitude with a clear error rather than building one that misroutes.
+- **Antimeridian-spanning regions** (Fiji, all-Russia via Chukotka,
+  NZ + Chathams) are **supported since D25**: a crossing region builds in a
+  shifted continuous-longitude frame (a `.graph` header flag; readers
+  predating it refuse such graphs cleanly), waypoints are accepted in
+  either ±360° form, and route output stays real-world `[-180, 180]`. For
+  such a region, `index.json`'s (and `Graph::bbox`'s) `max_lon` may read
+  past 180° (or `min_lon` below −180°) — that *is* the wrap signal: a
+  point is inside iff its `lon` or `lon ± 360` falls in
+  `[min_lon, max_lon]`. Genuinely wider-than-half-the-globe data is still
+  refused, and GeoJSON lines are normalized but not cut at the seam.
 - **Reproducible builds are same-platform only.** The same `.pbf` yields
   byte-identical `.graph` bytes on the same OS/toolchain, but edge lengths go
   through platform trig that isn't correctly-rounded, so bytes (and the

@@ -20,8 +20,26 @@ pub fn fixed_to_deg(fixed: i32) -> f64 {
     f64::from(fixed) / FIXED_POINT_SCALE
 }
 
+/// Wrap a longitude into `[-180°, 180°]` with a single ±360° step — the
+/// D25 output normalization for graphs stored in a shifted antimeridian
+/// frame. A single step suffices because the fixed-point `i32` domain
+/// bounds any stored longitude to ±214.7°. Identity for in-range values
+/// (including ±180 exactly) and NaN.
+#[inline]
+pub fn wrap_lon_deg(lon: f64) -> f64 {
+    if lon > 180.0 {
+        lon - 360.0
+    } else if lon < -180.0 {
+        lon + 360.0
+    } else {
+        lon
+    }
+}
+
 /// Great-circle distance in meters between two `(lat, lon)` points given in
-/// degrees, by the haversine formula.
+/// degrees, by the haversine formula. Seam-safe: `sin²(Δλ/2)` is even and
+/// 360°-periodic, so `lon = 190°` and `lon = -170°` measure identically
+/// (relied on by D25's boundary normalization).
 pub fn haversine_m(lat1: f64, lon1: f64, lat2: f64, lon2: f64) -> f64 {
     let phi1 = lat1.to_radians();
     let phi2 = lat2.to_radians();
@@ -105,6 +123,29 @@ mod tests {
             haversine_m(34.0, 33.0, 35.0, 34.0),
             haversine_m(35.0, 34.0, 34.0, 33.0)
         );
+    }
+
+    #[test]
+    fn wrap_lon_normalizes_shifted_frames() {
+        assert_eq!(wrap_lon_deg(190.0), -170.0);
+        assert_eq!(wrap_lon_deg(-188.0), 172.0);
+        // In-range values (±180 inclusive) are untouched.
+        for v in [0.0, 179.9999999, -180.0, 180.0, -33.0226] {
+            assert_eq!(wrap_lon_deg(v), v);
+        }
+        assert!(wrap_lon_deg(f64::NAN).is_nan());
+    }
+
+    #[test]
+    fn haversine_is_seam_safe_by_periodicity() {
+        // The same physical meridian expressed as 190° or -170° measures
+        // identically (D25's boundary normalization relies on this).
+        let a = haversine_m(51.0, 179.9, 51.0, 180.1);
+        let b = haversine_m(51.0, 179.9, 51.0, -179.9);
+        assert!((a - b).abs() < 1e-6, "{a} vs {b}");
+        // And it is the short way across the seam (~0.2° of lon at 51°N ≈
+        // 14 km), not the long way around the globe.
+        assert!((13_000.0..15_000.0).contains(&a), "{a}");
     }
 
     #[test]

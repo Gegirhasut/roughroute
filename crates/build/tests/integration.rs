@@ -228,6 +228,74 @@ fn collapse_preserves_route_shape_through_the_binary_format() {
     }
 }
 
+/// D25 end-to-end: a small road network straddling the ±180° antimeridian
+/// (Taveuni-style) through the full build → serialize → load → route
+/// pipeline. The route must cross the seam the short way, return real-world
+/// longitudes, and never wrap the wrong way around the globe.
+#[test]
+fn antimeridian_town_routes_across_the_seam() {
+    // A coastal road running west-to-east across 180°: three nodes west of
+    // the seam (positive lons), three east (negative lons), plus a junction
+    // spur so the collapse keeps a junction in play.
+    let coords: BTreeMap<i64, [f64; 2]> = [
+        (1, [-16.80, 179.96]),
+        (2, [-16.80, 179.98]),
+        (3, [-16.80, 180.00]),
+        (4, [-16.80, -179.98]),
+        (5, [-16.80, -179.96]),
+        (6, [-16.80, -179.94]),
+        (7, [-16.82, -179.98]), // spur off node 4
+    ]
+    .into_iter()
+    .collect();
+    let all = ACCESS_CAR | ACCESS_FOOT;
+    let ways = vec![
+        RawWay { node_ids: vec![1, 2, 3, 4, 5, 6], access: all },
+        RawWay { node_ids: vec![4, 7], access: all },
+    ];
+    let (built, _) = build_graph(&ways, &coords).unwrap();
+    assert!(built.lon_shifted(), "a seam-straddling region must build shifted");
+
+    // Consume through the bytes, as the runtime would.
+    let graph = Graph::from_bytes(&built.to_bytes()).unwrap();
+    assert!(graph.lon_shifted());
+
+    // Route across the seam, waypoints given in real-world coordinates on
+    // both sides (and in both directions).
+    let west = [-16.80, 179.965];
+    let east = [-16.80, -179.945];
+    for (from, to) in [(west, east), (east, west)] {
+        for profile in [Profile::Car, Profile::Foot] {
+            let r = router(&graph, profile).route(&[from, to]).unwrap();
+            assert!(!r.fallback, "{profile:?} must route on the road");
+            // Real-world output longitudes only.
+            assert!(
+                r.line.iter().all(|p| (-180.0..=180.0).contains(&p[1])),
+                "non-normalized lon in {:?}",
+                r.line
+            );
+            // The short way across the seam is 0.09° of lon at 16.8°S
+            // (≈ 9.6 km following the road); the wrong way around the
+            // globe would be ~40,000 km. Also sane vs the straight line.
+            let direct = haversine_m(from[0], from[1], to[0], to[1]);
+            assert!((8_000.0..12_000.0).contains(&r.meters), "meters = {}", r.meters);
+            assert!(r.meters >= direct * 0.99 && r.meters < direct * 3.0);
+            // Each step is a short hop (no jump the long way around).
+            for w in r.line.windows(2) {
+                let step = haversine_m(w[0][0], w[0][1], w[1][0], w[1][1]);
+                assert!(step < 5_000.0, "disconnected/wrapped step of {step} m");
+            }
+        }
+    }
+
+    // A within-one-side route (west of the seam) works normally too.
+    let r = router(&graph, Profile::Car)
+        .route(&[[-16.80, 179.965], [-16.80, 179.995]])
+        .unwrap();
+    assert!(!r.fallback);
+    assert!((3_000.0..5_000.0).contains(&r.meters), "meters = {}", r.meters);
+}
+
 /// Runs only with `cargo test -- --ignored` and only when the Cyprus fixture
 /// has been downloaded to `testdata/cyprus.osm.pbf` (see README).
 #[test]

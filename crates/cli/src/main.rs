@@ -202,6 +202,14 @@ fn build_from_pbf(
         bb.max_lat,
         bb.max_lon,
     );
+    if graph.lon_shifted() {
+        eprintln!(
+            "  antimeridian-crossing region: longitudes stored in a shifted continuous frame \
+             (bbox lon may read past ±180°; route output stays [-180, 180] — \
+             docs/DECISIONS.md D25); {} coincident seam node(s) stitched",
+            stats.seam_nodes_merged,
+        );
+    }
     eprintln!(
         "  ways used: {}, segments dropped (missing nodes): {}, duplicate edges merged: {}",
         stats.ways_used, stats.segments_dropped_missing_node, stats.duplicate_edges_merged,

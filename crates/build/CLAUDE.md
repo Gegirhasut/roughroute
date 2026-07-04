@@ -14,6 +14,17 @@ only; **never** compiled into the WASM or native phone runtime (spec §5.1).
 - Junction correctness depends on OSM node-id dedup across ways — one global
   `osm_node_id → node index` map (DECISIONS D1). Never slice ways into
   per-way node copies.
+- Antimeridian-crossing regions (D25): detected where the old rejection
+  lived (node lon span > 180° but ≤ 180° after wrapping negatives +360°),
+  then longitudes are shifted **in fixed-point (exact integer add)** into a
+  continuous frame *before* any length is measured, and the graph is built
+  with the `LON_SHIFTED` header flag. OSM splits ways at ±180° into halves
+  ending in coincident-but-distinct nodes, so the **seam stitch** merges
+  exact-coincident nodes on the seam meridian (lowest OSM id canonical) —
+  without it the graph disconnects precisely at 180°. Non-crossing regions
+  cannot reach any of this (it sits behind the branch that used to
+  `return Err`) — their output is byte-identical by construction,
+  sha256-proven.
 
 ## Structure (DECISIONS D8 — keep the layering; D23 — keep it compact)
 - **Pure layer** (the bulk): in-memory road network → `core::Graph`. There

@@ -985,17 +985,191 @@ Geofabrik's per-district Russia extracts (each well within the seam) or
 implementing antimeridian support (the known-limitations entry's "real
 fix").
 
+## D25. Antimeridian-crossing regions: a shifted continuous-longitude frame (implemented 2026-07-04)
+
+**Problem.** Regions crossing the ±180° meridian (all-Russia via Chukotka;
+Fiji; NZ+Chathams; Alaska) are refused today (`AntimeridianSpanning`)
+because five things assume longitude is monotonic across the region: the
+header bbox, the uniform grid, the equirectangular snap projection
+(`plon − lon`), and — audited, see below — distance math and the
+router/geometry path. This decision adds support **without touching the
+non-crossing code path**: every existing region must produce a
+byte-identical `.graph` (same sha256), proven by rebuild.
+
+**Core idea: crossing regions are stored in a *shifted, continuous*
+longitude frame; everything internal is unchanged math over continuous
+values; conversion happens only at the graph's I/O boundary.**
+
+- **Detection (build, at the exact spot the rejection lives today —
+  between node-table construction and edge measurement, so nothing
+  upstream/downstream moves).** If the node universe's lon span ≤ 180°:
+  the path is *bit-for-bit today's* (no shift, `flags = 0`). Else compute
+  the wrapped candidate: every negative lon + 360° (frame `[0°, 360°)`).
+  If the wrapped span is still > 180° → the data is genuinely too wide
+  (junk, half-globe): reject with today's `AntimeridianSpanning` error.
+  Else it's a real crossing: adopt the wrapped frame. This distinguishes a
+  genuine wrap from a data error by construction — a real seam-crossing
+  region is *narrow* in the wrapped frame.
+- **The shift is exact.** It happens in the fixed-point domain:
+  `lon' = lon + 3_600_000_000` as `i64` (then bounds-checked back into
+  `i32`) — an integer add, no f64 rounding anywhere. Coordinates were
+  already quantized before measurement (D3), and all lengths are computed
+  *after* the shift, in one consistent frame.
+- **Recentering + the representable window.** Fixed-point `i32` caps lons
+  at ±214.7°. After wrapping, if `max_lon' > 210°` subtract 360° from all
+  lons (e.g. Alaska `[172°, 230°]` → `[−188°, −130°]`); if the result's
+  `min < −210°` reject (a region overhanging the seam by ≳30° on *both*
+  sides — no real extract does this; the error says so plainly). Russia:
+  `[19.9°, ~190°]`, no recenter needed.
+- **Format: version stays 3; header `flags` bit0 is defined as
+  `LON_SHIFTED`.** The field exists, is written/parsed already, and is 0
+  in every published graph — so non-crossing graphs are byte-identical *by
+  construction*, and **old readers refuse a flagged graph cleanly**
+  ("unknown flags bits set", the D6/D12 discipline doing exactly its job)
+  instead of misrouting. No version bump → no spurious staleness: the 15
+  published regions' `format_version: 3` stays valid, `--trust-index`
+  keeps skipping them. `Graph::from_parts` keeps its signature (flags 0);
+  a new `from_parts_with_flags` carries the bit from the builder.
+- **Loader validation (flag-gated additions only; the `flags == 0` path
+  keeps today's checks verbatim).** For flagged graphs: bbox must still be
+  monotonic (it is — that's the point of the frame), lon span ≤ 180°, and
+  the bbox must actually stick out past ±180° (a flag with no wrap is
+  non-canonical → `Malformed`, same discipline as geometry-less-edge
+  canonical form). The absolute ±180° lon check is replaced by
+  bbox-containment (which the `i32` domain already bounds at ±214.7°);
+  latitude checks unchanged.
+
+**The five audit items:**
+1. **bbox/header**: stored in the shifted frame, monotonic, `min ≤ max`
+   as always; `max_lon > 180°` (or `min < −180°`) *is* the wrap signal.
+   `Graph::bbox()` and index.json carry it as-is with the documented
+   convention: a point is inside iff `lat` in range and `lon` or
+   `lon ± 360` in `[min_lon, max_lon]`.
+2. **Uniform grid**: zero changes. It's built over the (monotonic) bbox
+   and continuous shifted lons — Russia's grid spans ~170° of frame, not
+   a 340° Pacific-wide void. Queries are normalized into the frame first
+   (below), after which `cell_of`, ring search, and its termination proof
+   are untouched.
+3. **Snap projection (`to_xy`, the review-flagged `plon − lon`)**: with
+   the query normalized into the frame and all shape points continuous,
+   `|plon − lon|` is small near any candidate — the seam no longer exists
+   inside the frame. No wrapping arithmetic added to the hot path.
+4. **Haversine/bearing**: already seam-safe — `sin²(Δλ/2)` is even and
+   360°-periodic, so shifted-frame and normalized coordinates give the
+   same distance (verified with a unit test either way). All internal
+   distance/heuristic/`distance_along_dm` calls use one consistent frame;
+   A\*'s heuristic stays admissible.
+5. **A\*/geometry emission**: A\* is index/cost-based; geometry expansion
+   is pool-order-based; neither reads longitude ordering. Audited
+   `router.rs`: coordinates flow only through snap (input), the heuristic
+   (frame-consistent), and line assembly (output boundary below).
+
+**The seam stitch (found during verification, part of the mechanism).**
+The shifted frame alone is *not* enough to route across the seam: OSM's
+data model forbids ways from crossing the antimeridian, so mappers split a
+road at ±180° into two ways ending in **coincident but distinct nodes**
+(one per side — verified on Fiji: 4 such pairs, e.g. two nodes both at
+`(-16.793516, ±180.0)`). Id-based dedup (D1) cannot join them, so without
+more the graph falls apart exactly at the seam — routes "across" came back
+as fallback straight lines. Fix, inside the crossing branch only: after
+the shift, nodes coinciding **exactly** on the seam meridian (equal lat,
+lon exactly ±180° — the editing convention) are merged, keeping the
+lowest-OSM-id member (deterministic, D3). Merged nodes are removed from
+the node universe (no isolated snap targets); their ids still resolve via
+a redirect, so both way halves connect at one junction — which the
+degree-2 collapse may then swallow into edge geometry like any other
+through-node. Counted in `BuildStats::seam_nodes_merged`; always 0 for
+non-crossing regions. Deliberately exact-match only: a pair mis-digitized
+by even 1e-7° stays split (same as today) rather than risking a general
+coordinate-merge heuristic.
+
+**The I/O boundary (the only new runtime code, all flag-gated):**
+- **In:** `Graph::road_snap` / `nearest_node` / `nearest_road` (the choke
+  points every query, including `Router::route`'s waypoints, goes
+  through) normalize the query lon into the frame:
+  `lon' = center + wrap_(−180,180](lon − center)` with `center` = bbox lon
+  midpoint — one formula, no ties, accepts both `−170°` and `190°` forms.
+- **Out:** `route()` normalizes every line lon into `[−180°, 180°]` right
+  after assembly (span ≤ 180° guarantees a single ±360 step suffices);
+  `meters` is then summed over the *normalized* line (identical value by
+  haversine periodicity — the app-visible pair stays self-consistent).
+  `nearest_road`'s public point and `node_latlon` normalize the same way.
+  JSON/GeoJSON/GPX serializers and WASM/FFI consume `RouteResult` and are
+  untouched — they inherit correct `[−180, 180]` coordinates. (GeoJSON
+  note: RFC 7946 suggests *cutting* seam-crossing lines; we emit
+  normalized coordinates without cutting, like most tools — a viewer may
+  draw a horizontal jump at the seam; cosmetic, documented, out of scope.)
+
+**Why the non-crossing path provably can't regress:** the builder's shift
+executes only behind the `span > 180°` branch that today *returns an
+error* — regions that build today literally cannot reach the new code.
+The loader/runtime additions are gated on a flag that is 0 in every
+existing graph, and the serializer already round-trips `flags`
+byte-for-byte. On top of the construction argument: sha256 rebuild
+regression on every locally-buildable region (the D23 harness — Germany
+and France excluded locally: their release-mode peaks of 6.4/6.8 GiB
+already exceed this 5.8 GB VM, and CI never rebuilds them thanks to
+`--trust-index`).
+
+### D25 results (2026-07-04)
+
+- **Byte-identity: 10/10.** Every locally-buildable non-crossing region
+  (andorra, malta, montenegro, cyprus, luxembourg, iceland, moldova,
+  estonia, latvia, slovenia) built with the pre-D25 and final D25 builders
+  from the same `.pbf`s: **sha256 identical in all 10 cases** (re-proven
+  against the final binary after the seam stitch landed). Germany/France
+  excluded locally (their release peaks alone exceed the dev VM's RAM);
+  CI never rebuilds them under `--trust-index`.
+- **Fiji (real crossing extract, 16.8 MB pbf):** builds flagged and
+  shifted — bbox `[-20.67, 176.91] – [-12.48, 181.76]` (`max_lon` > 180°
+  = the wrap signal), 47,155 nodes, 4 coincident seam pairs stitched. The
+  Taveuni seam route (car, between real road nodes at 179.966°E and
+  −179.967°W): **395 points, 13,775 m, `fallback: false`, identical in
+  both directions**; all output longitudes in `[-180, 180]`; the seam
+  crossing appears in the line as `[-16.7935, 180.0] →
+  [-16.7934, -179.9999]` — a **12.6 m** physical step, not a
+  wrong-way-around-the-globe wrap (which would read ~40,000 km); max step
+  anywhere 235 m; route/straight-line factor 1.1. A within-west-side
+  control route: 8,979 m on-road.
+- Stitch arithmetic cross-check: kept nodes 47,163 → 47,155 (each of the
+  4 stitched pairs turns two disconnected dead-ends into one through-node
+  that the degree-2 collapse then swallows: −2 kept nodes each), geometry
+  +4 — exactly as predicted.
+- Full suites green: 53 core (incl. 5 new D25 cases), 23 build (incl.
+  split-way stitch, genuinely-wide rejection, window-overflow rejection,
+  Alaska-style recenter), the end-to-end seam-town integration test, WASM
+  `wasm32-unknown-unknown` check, clippy 0 warnings.
+
+**Verification plan (the Russia caveat, stated up front):** all-Russia
+(4.12 GB pbf, ~5.6 GiB projected release peak) cannot build on this dev VM
+in any profile — its numbers must come from the CI run when Russia is
+added to the manifest (explicitly out of this task's scope). The local
+real-data seam proof is **Fiji** (`oceania/fiji-latest`, a few tens of MB,
+genuinely crossing 180° at Taveuni): build it locally with the new
+builder, assert the flag is set, snap+route across the seam (a leg whose
+endpoints straddle 180°) and check the line is sane — short, on-road, no
+wrong-way-around-the-globe wrap — plus a western no-seam route. Unit
+tests: synthetic seam-straddling fixtures through build→serialize→load→
+route; loader validation cases (flag without wrap, span > 180°, unknown
+bits still refused); haversine periodicity; query normalization from both
+lon representations. And the full existing suite: golden/determinism,
+way-shuffle, WASM smoke, clippy.
+
 ## Known limitations (deliberate v1 scope)
 
 These are known and out of scope for v1 — documented so they're a choice, not
 a surprise. Each notes the real fix if it ever becomes necessary.
 
-- **Antimeridian-spanning regions** (Fiji, Chukotka, NZ + Chathams): the
-  snapping projection is a local equirectangular frame that computes
-  `plon − lon` without wrapping, so it is wrong across the ±180° seam. Rather
-  than misroute silently, `build_graph` **rejects** any region whose longitude
-  span exceeds 180° with `BuildError::AntimeridianSpanning`. Full support
-  (wrapping the projection and the grid at the seam) is deferred.
+- **Antimeridian-spanning regions — supported since D25** (Fiji, all-Russia
+  via Chukotka, NZ + Chathams, Alaska): crossing regions build in a shifted
+  continuous-longitude frame (header flag bit0), so the grid/snapping/bbox
+  never see the seam and route output stays real-world `[-180°, 180°]`.
+  Remaining limits: a region overhanging the seam by ≳30° on *both* sides
+  is refused (`AntimeridianWindow` — the shifted frame wouldn't fit
+  fixed-point `i32`; no real extract does this), genuinely
+  wider-than-half-the-globe data is still refused, and GeoJSON output is
+  normalized but **not cut** at the seam (RFC 7946 suggests cutting;
+  viewers may draw a horizontal jump across the map — cosmetic).
 
 - **Cross-platform byte-identical builds**: reproducibility is
   **same-platform/toolchain only** (D3). `length_dm` depends on libm trig,

@@ -35,6 +35,13 @@ from `&[u8]`, hold the CSR road graph, snap waypoints, run A\*, produce a
   LEB128 varints (`geo_bytes` header field = exact section length) and
   decoded once at load into the same absolute `Vec<[i32;2]>` v1/v2 held
   directly — nothing downstream is aware the on-disk encoding changed.
+  Header `flags` bit0 = `HEADER_FLAG_LON_SHIFTED` (D25): the region
+  crosses ±180° and longitudes are stored in a shifted continuous frame
+  (bbox monotonic, may read past ±180°; queries normalized in at
+  `road_snap`/`nearest_node`, results normalized out at `route()`/
+  `node_latlon`/`nearest_road`). All other flag bits are refused — which
+  is also what makes pre-D25 readers refuse a shifted graph cleanly.
+  Non-crossing graphs never set the flag; their bytes are unchanged.
   Little-endian, explicit decode; fixed-width sections stay 4-byte aligned
   in-file (DECISIONS D2), though the variable-length geometry section rules
   out true zero-copy for it regardless. **v1 and v2 files are both refused**

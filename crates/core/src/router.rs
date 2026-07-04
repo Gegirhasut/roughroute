@@ -232,6 +232,18 @@ impl<'g> Router<'g> {
             line.push(line[0]);
         }
 
+        // Antimeridian-crossing graphs assemble the line in their shifted
+        // frame (D25); the contract speaks real-world [-180°, 180°], so
+        // normalize here — the single output boundary — and sum `meters`
+        // over the normalized line (haversine is 360°-periodic in Δλ, so the
+        // value is the same either way; the app-visible pair stays
+        // self-consistent).
+        if self.graph.lon_shifted() {
+            for p in &mut line {
+                p[1] = geo::wrap_lon_deg(p[1]);
+            }
+        }
+
         let meters = line
             .windows(2)
             .map(|w| geo::haversine_m(w[0][0], w[0][1], w[1][0], w[1][1]))

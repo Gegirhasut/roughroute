@@ -11,7 +11,8 @@
 //! | edges    | `edge_count × 16` | per edge: `target: u32`, `length_dm: u32`, `geo_off: u32`, `geo_len: u16`, `flags: u8`, `access: u8` |
 //! | geometry | `geo_bytes` (variable) | zigzag-delta LEB128 varints decoding to `geo_point_count` `[lat, lon]` fixed-point points |
 //!
-//! Header: `magic: [u8;4] = "RRG1"`, `version: u16 = 3`, `flags: u16`,
+//! Header: `magic: [u8;4] = "RRG1"`, `version: u16 = 3`, `flags: u16`
+//! (bit0 = [`HEADER_FLAG_LON_SHIFTED`], D25; all other bits must be 0),
 //! `node_count: u32`, `edge_count: u32`, `min_lat, min_lon, max_lat,
 //! max_lon: i32` (fixed-point 1e7 bbox over nodes *and* geometry),
 //! `geo_point_count: u32` (decoded point count), `geo_bytes: u32` (exact byte
@@ -59,6 +60,15 @@ use crate::graph::{Edge, GraphError};
 pub const MAGIC: [u8; 4] = *b"RRG1";
 /// The format version this crate reads and writes.
 pub const VERSION: u16 = 3;
+/// Header `flags` bit0 (D25): the graph's longitudes are stored in a
+/// *shifted continuous frame* because the region crosses the ±180°
+/// antimeridian — coordinate values may lie outside `[-180°, 180°]` (the
+/// header bbox does, by definition), the bbox stays monotonic with a lon
+/// span ≤ 180°, and consumers normalize back to `[-180°, 180°]` at the
+/// public boundary. Graphs of non-crossing regions never set this (their
+/// bytes are unchanged from pre-D25 builds); readers predating the flag
+/// refuse a flagged graph cleanly via the unknown-flag check (D6).
+pub const HEADER_FLAG_LON_SHIFTED: u16 = 1 << 0;
 /// Size of the fixed header in bytes.
 pub const HEADER_BYTES: usize = 40;
 /// Size of one node record (two fixed-point `i32` coordinates).
