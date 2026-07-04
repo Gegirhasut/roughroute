@@ -5,6 +5,13 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>roughroute — offline OSM mini-router</title>
 <meta name="description" content="A fast, tiny, fully offline OSM router. Give it waypoints, get a road-following polyline. Compiles to WASM, native, and CLI.">
+<!-- Relative favicons/ hrefs: this is a project page served under /roughroute/,
+     so a root-absolute "/favicon.svg" would resolve against the user domain and 404. -->
+<link rel="icon" href="favicons/favicon.ico" sizes="32x32">
+<link rel="icon" href="favicons/favicon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="favicons/apple-touch-icon.png">
+<link rel="manifest" href="favicons/site.webmanifest">
+<meta name="theme-color" content="#0a0e13">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
@@ -201,6 +208,20 @@
     font-size:14px;color:var(--muted);transition:color .18s,transform .18s;
   }
   .region:hover .dl,.region:focus-visible .dl{color:var(--route);transform:translateY(2px)}
+  /* expand toggle + build-your-own link below the grid (reuses tokens) */
+  .regions-actions{margin-top:24px;display:flex;flex-wrap:wrap;gap:12px 26px;align-items:center;justify-content:space-between}
+  .regions-toggle{
+    background:none;border:0;cursor:pointer;padding:6px 0;
+    font-family:'Space Mono',monospace;font-size:13px;letter-spacing:0.04em;color:var(--route);
+  }
+  .regions-toggle:hover{color:#96e6a8}
+  .regions-toggle:focus-visible{outline:2px solid var(--route);outline-offset:3px}
+  .regions-toggle[hidden]{display:none}
+  .regions-build{font-family:'Space Mono',monospace;font-size:13px;color:var(--muted);border-bottom:1px solid var(--line-2);padding-bottom:1px}
+  .regions-build:hover{color:var(--route);border-color:var(--route)}
+  .regions-fallback{margin-top:20px;font-family:'Space Mono',monospace;font-size:13px}
+  .regions-fallback a{color:var(--route);border-bottom:1px solid var(--line-2);padding-bottom:1px}
+  .regions-fallback a:hover{border-color:var(--route)}
 
   /* ---------- footer ---------- */
   footer{position:relative;z-index:1;border-top:1px solid var(--line);padding:54px 0 70px;background:var(--ink)}
@@ -551,37 +572,25 @@ roughroute <span class="g">route</span> --graph cyprus.graph --profile car \
       <h2 data-en="Grab a region, or build your own." data-ru="Возьми регион или собери свой." data-zh="取用现成区域，或自行构建。" data-es="Toma una región, o construye la tuya." data-de="Nimm eine Region, oder baue deine eigene." data-fr="Prenez une région, ou construisez la vôtre." data-pt="Pegue uma região, ou construa a sua." data-ja="リージョンを選ぶか、自分で構築する。" data-ar="خذ منطقة جاهزة، أو ابنِ منطقتك الخاصة.">Grab a region, or build your own.</h2>
       <p data-en="Region graphs are built by CI from a manifest and published as release assets, each with a recorded checksum. Add a line, push, and the pipeline bakes just that region." data-ru="Графы регионов собираются CI по манифесту и публикуются как файлы релиза, каждый с зафиксированной контрольной суммой. Добавьте строку, запушьте — и конвейер соберёт только этот регион." data-zh="区域图由 CI 根据清单构建，并作为发布资源发布，每个都带有记录的校验和。添加一行、推送，流水线就只构建那一个区域。" data-es="Los grafos regionales los construye la CI a partir de un manifiesto y se publican como assets de release, cada uno con su checksum registrado. Añade una línea, haz push, y el pipeline compila solo esa región." data-de="Regionsgraphen werden von der CI aus einem Manifest gebaut und als Release-Assets veröffentlicht, jeder mit erfasster Prüfsumme. Eine Zeile hinzufügen, pushen — und die Pipeline baut genau diese Region." data-fr="Les graphes régionaux sont construits par la CI à partir d'un manifeste et publiés comme assets de release, chacun avec une somme de contrôle enregistrée. Ajoutez une ligne, poussez, et le pipeline ne construit que cette région." data-pt="Os grafos regionais são construídos pela CI a partir de um manifesto e publicados como assets de release, cada um com um checksum registrado. Adicione uma linha, faça push, e o pipeline constrói só aquela região." data-ja="リージョングラフはマニフェストをもとに CI がビルドし、それぞれチェックサムを記録した上でリリースアセットとして公開されます。一行追加してプッシュすれば、パイプラインはそのリージョンだけをビルドします。" data-ar="تُبنى الرسوم البيانية الإقليمية بواسطة CI انطلاقًا من بيان (manifest) وتُنشر كأصول إصدار (release assets)، كل واحد منها مع مجموع اختباري (checksum) مسجَّل. أضف سطرًا واحدًا وادفعه، فيبني خط الإنتاج تلك المنطقة فقط.">Region graphs are built by CI from a manifest and published as release assets, each with a recorded checksum. Add a line, push, and the pipeline bakes just that region.</p>
     </div>
-    <!-- Direct links to the graphs-v3 release assets. Static (Option A):
-         GitHub release-asset URLs send no CORS headers, so a cross-origin
-         fetch of index.json from this github.io page is blocked by the
-         browser — a dynamic build from index.json isn't possible. Sizes are
-         decimal MB from index.json; update these when regions/sizes change. -->
-    <div class="regions" dir="ltr">
-      <a class="region" href="https://github.com/Gegirhasut/roughroute/releases/download/graphs-v3/andorra.graph" download aria-label="Download the Andorra region graph (1.1 MB, v3)">
-        <span class="dl" aria-hidden="true">↓</span>
-        <div class="name">Andorra</div><div class="size">1.1 MB</div><div class="sub">v3 graph</div>
-      </a>
-      <a class="region" href="https://github.com/Gegirhasut/roughroute/releases/download/graphs-v3/malta.graph" download aria-label="Download the Malta region graph (3.4 MB, v3)">
-        <span class="dl" aria-hidden="true">↓</span>
-        <div class="name">Malta</div><div class="size">3.4 MB</div><div class="sub">v3 graph</div>
-      </a>
-      <a class="region" href="https://github.com/Gegirhasut/roughroute/releases/download/graphs-v3/cyprus.graph" download aria-label="Download the Cyprus region graph (20.8 MB, v3)">
-        <span class="dl" aria-hidden="true">↓</span>
-        <div class="name">Cyprus</div><div class="size">20.8 MB</div><div class="sub">v3 graph</div>
-      </a>
-      <a class="region" href="https://github.com/Gegirhasut/roughroute/releases/download/graphs-v3/slovenia.graph" download aria-label="Download the Slovenia region graph (56.4 MB, v3)">
-        <span class="dl" aria-hidden="true">↓</span>
-        <div class="name">Slovenia</div><div class="size">56.4 MB</div><div class="sub">v3 graph</div>
-      </a>
-      <a class="region" href="https://github.com/Gegirhasut/roughroute/releases/download/graphs-v3/kenya.graph" download aria-label="Download the Kenya region graph (110.1 MB, v3)">
-        <span class="dl" aria-hidden="true">↓</span>
-        <div class="name">Kenya</div><div class="size">110.1 MB</div><div class="sub">v3 graph</div>
-      </a>
-      <a class="region" href="https://github.com/Gegirhasut/roughroute/releases/download/graphs-v3/switzerland.graph" download aria-label="Download the Switzerland region graph (185.9 MB, v3)">
-        <span class="dl" aria-hidden="true">↓</span>
-        <div class="name">Switzerland</div><div class="size">185.9 MB</div><div class="sub">v3 graph</div>
-      </a>
+    <!-- The grid is rendered at runtime from index.json (same-origin copy,
+         deployed next to this page) so sizes/checksums/URLs stay honest and
+         self-updating — never hardcoded. Collapsed view = a curated featured
+         set of exactly 6; the toggle expands to every region. See the regions
+         IIFE at the bottom of the page for the render + i18n logic.
+         Featured order: Cyprus, California, Germany, Switzerland, France,
+         Kenya. If any were absent from index.json the slot would be filled by
+         the next-largest available region (all 6 are currently present). -->
+    <div class="regions" id="regionGrid" dir="ltr" aria-busy="true"></div>
+    <div class="regions-actions">
+      <button class="regions-toggle" id="regionToggle" type="button" aria-expanded="false" aria-controls="regionGrid" hidden></button>
+      <a class="regions-build" href="https://github.com/Gegirhasut/roughroute#adding-a-region"
+         data-en="Build your own region →" data-ru="Соберите свой регион →" data-zh="构建你自己的区域 →" data-es="Construye tu propia región →" data-de="Eigene Region bauen →" data-fr="Construisez votre propre région →" data-pt="Construa sua própria região →" data-ja="自分のリージョンを構築する →" data-ar="← ابنِ منطقتك الخاصة">Build your own region →</a>
     </div>
+    <!-- Shown only when the runtime fetch of index.json fails or JS is off, so
+         the section never dead-ends. No sizes here — those come from index.json. -->
+    <p class="regions-fallback" id="regionFallback">
+      <a href="https://github.com/Gegirhasut/roughroute/releases/download/graphs-v3/" data-en="Browse all region graphs on GitHub ↗" data-ru="Смотреть все графы регионов на GitHub ↗" data-zh="在 GitHub 上浏览所有区域图 ↗" data-es="Ver todos los grafos regionales en GitHub ↗" data-de="Alle Regionsgraphen auf GitHub ansehen ↗" data-fr="Voir tous les graphes régionaux sur GitHub ↗" data-pt="Ver todos os grafos regionais no GitHub ↗" data-ja="GitHub ですべてのリージョングラフを見る ↗" data-ar="تصفّح جميع الرسوم البيانية الإقليمية على GitHub ↗">Browse all region graphs on GitHub ↗</a>
+    </p>
   </div>
 </section>
 
@@ -1121,6 +1130,118 @@ window.__rrLang = 'en';   // current UI language; runtime-generated strings (dem
 
   /* language switch: re-render the strings the switcher can't reach */
   window.addEventListener('rr-lang', ()=>{ renderReadout(); });
+})();
+
+/* ---------- pre-built graphs: dynamic tiles from index.json ----------
+   Renders a curated featured 6 (collapsed) or every region (expanded),
+   always sourcing name/size/checksum-backed URL from the same-origin
+   index.json copy deployed next to this page — sizes are never hardcoded.
+   Coordinates and every other section are untouched. */
+(function(){
+  'use strict';
+  const grid = document.getElementById('regionGrid');
+  if(!grid) return;
+  const toggle = document.getElementById('regionToggle');
+  const fallback = document.getElementById('regionFallback');
+  const INDEX = './index.json';
+  const RELEASE = 'https://github.com/Gegirhasut/roughroute/releases/download/graphs-v3/';
+  const FEATURED = ['cyprus', 'us-california', 'germany', 'switzerland', 'france', 'kenya'];
+
+  /* dynamic strings (N is runtime; toggle state flips) — rendered on the
+     switcher's rr-lang event, like the demo's runtime dict */
+  const RSTR = {
+    en: { all: n => 'Show all ' + n + ' regions', fewer: 'Show fewer' },
+    ru: { all: n => 'Показать все регионы (' + n + ')', fewer: 'Показать меньше' },
+    zh: { all: n => '显示全部 ' + n + ' 个区域', fewer: '收起' },
+    es: { all: n => 'Ver las ' + n + ' regiones', fewer: 'Ver menos' },
+    de: { all: n => 'Alle ' + n + ' Regionen zeigen', fewer: 'Weniger zeigen' },
+    fr: { all: n => 'Voir les ' + n + ' régions', fewer: 'Voir moins' },
+    pt: { all: n => 'Ver todas as ' + n + ' regiões', fewer: 'Ver menos' },
+    ja: { all: n => n + ' 個すべてのリージョンを表示', fewer: '表示を減らす' },
+    ar: { all: n => 'عرض كل المناطق (' + n + ')', fewer: 'عرض أقل' },
+  };
+  const rstr = () => RSTR[window.__rrLang] || RSTR.en;
+
+  let regions = [], expanded = false;
+
+  const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+  const fmtSize = bytes => (bytes / 1e6).toFixed(1) + ' MB';   // decimal MB, matching the prior tiles
+
+  function tile(r){
+    const size = fmtSize(r.bytes);
+    const file = (r.file || (r.url ? r.url.split('/').pop() : r.id + '.graph'));
+    const a = document.createElement('a');
+    a.className = 'region';
+    a.href = r.url || (RELEASE + file);
+    a.setAttribute('download', '');
+    a.setAttribute('aria-label', 'Download the ' + r.name + ' region graph (' + size + ', v3)');
+    a.innerHTML =
+      '<span class="dl" aria-hidden="true">↓</span>' +
+      '<div class="name">' + esc(r.name) + '</div>' +
+      '<div class="size">' + size + '</div>' +
+      '<div class="sub">v3 graph</div>';
+    return a;
+  }
+
+  /* the curated 6: featured-by-id in order, any missing slot filled by the
+     next-largest region not already featured, so exactly 6 always render */
+  function featuredSix(){
+    const byId = new Map(regions.map(r => [r.id, r]));
+    const picked = [], used = new Set(), missing = [];
+    for(const id of FEATURED){
+      const r = byId.get(id);
+      if(r){ picked.push(r); used.add(r.id); } else { missing.push(id); }
+    }
+    if(picked.length < 6){
+      const rest = regions.filter(r => !used.has(r.id)).sort((a, b) => b.bytes - a.bytes);
+      for(const r of rest){ if(picked.length >= 6) break; picked.push(r); used.add(r.id); }
+    }
+    if(missing.length) console.info('regions: featured not in index.json, slots filled by size:', missing.join(', '));
+    return picked.slice(0, 6);
+  }
+
+  function render(){
+    let list;
+    if(expanded){
+      const six = featuredSix();
+      const seen = new Set(six.map(r => r.id));
+      const rest = regions.filter(r => !seen.has(r.id)).sort((a, b) => b.bytes - a.bytes);
+      list = six.concat(rest);         // featured first (curated order), then the rest by size
+    }else{
+      list = featuredSix();
+    }
+    grid.replaceChildren(...list.map(tile));
+    grid.removeAttribute('aria-busy');
+  }
+
+  function renderToggle(){
+    if(!toggle || toggle.hidden) return;
+    toggle.textContent = expanded ? rstr().fewer : rstr().all(regions.length);
+    toggle.setAttribute('aria-expanded', String(expanded));
+  }
+
+  if(toggle){
+    toggle.addEventListener('click', () => { expanded = !expanded; render(); renderToggle(); });
+  }
+  // dynamic label follows the language switcher
+  window.addEventListener('rr-lang', renderToggle);
+
+  (async function load(){
+    try{
+      const resp = await fetch(INDEX, {cache: 'no-cache'});
+      if(!resp.ok) throw new Error('HTTP ' + resp.status);
+      const idx = await resp.json();
+      regions = (idx.regions || []).filter(r => r && r.id && typeof r.bytes === 'number');
+      if(!regions.length) throw new Error('index.json has no regions');
+      render();
+      if(fallback) fallback.hidden = true;
+      if(toggle && regions.length > 6){ toggle.hidden = false; renderToggle(); }
+    }catch(e){
+      // leave the "browse on GitHub" fallback visible; never dead-end the section
+      console.warn('regions: index.json unavailable, showing fallback link:', e && e.message);
+      grid.removeAttribute('aria-busy');
+    }
+  })();
 })();
 </script>
 </body>
