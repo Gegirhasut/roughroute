@@ -100,6 +100,11 @@ name = "France"
 pbf_url = "https://download.geofabrik.de/europe/france-latest.osm.pbf"
 
 [[region]]
+id = "italy"
+name = "Italy"
+pbf_url = "https://download.geofabrik.de/europe/italy-latest.osm.pbf"
+
+[[region]]
 id = "russia"
 name = "Russia"
 pbf_url = "https://download.geofabrik.de/russia-latest.osm.pbf"
