@@ -14,7 +14,7 @@ use std::error::Error;
 use std::fs;
 use std::path::PathBuf;
 
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 use roughroute_build::{build_graph_compact, read_road_network};
 use roughroute_core::{Graph, Profile, RouteOptions, Router};
 
@@ -46,6 +46,9 @@ enum Command {
         /// Profiles to include, comma-separated (ways usable by none are dropped).
         #[arg(long, value_delimiter = ',', default_values = ["car", "foot"])]
         profiles: Vec<CliProfile>,
+        /// Download safety gate (only relevant with --pbf-url).
+        #[command(flatten)]
+        gate: PbfGateArgs,
     },
     /// Build, verify, and index every region in the manifest (dev/CI):
     /// per region download -> build -> verify -> delete the .pbf, then write
@@ -77,6 +80,9 @@ enum Command {
         /// disk re-hash. See docs/DECISIONS.md D20 addendum.
         #[arg(long)]
         trust_index: bool,
+        /// Download safety gate (applies to every region's .pbf).
+        #[command(flatten)]
+        gate: PbfGateArgs,
     },
     /// Build a route over a .graph and print it to stdout.
     Route {
@@ -99,6 +105,35 @@ enum Command {
         #[arg(long)]
         no_fallback: bool,
     },
+}
+
+/// Shared download-safety options, flattened into every subcommand that can
+/// reach [`net::gate_download`] (`build --pbf-url`, `batch`) so the flag is
+/// defined once. Resolved by [`net::resolve_max_pbf_ceiling`] (flag > env >
+/// default) before the gate runs.
+#[derive(Args)]
+struct PbfGateArgs {
+    /// Max size (decimal GB) of a single .osm.pbf the builder will download [default: 6].
+    #[arg(
+        long = "max-pbf-gb",
+        value_name = "GB",
+        value_parser = net::parse_max_pbf_gb,
+        long_help = "Max size of a single .osm.pbf the builder will download, in decimal GB \
+(6, 6.5, 12). Default 6 GB.\n\n\
+WHY: a safety brake so an accidental or mistyped huge source — a US-sized country, or the \
+whole planet — can't silently start a multi-hour download that fills the disk on an \
+unattended run.\n\n\
+NOT A MEMORY LIMIT: the builder never gates on RAM; per-region peak RAM is only measured \
+and logged. Raising this will NOT prevent an out-of-memory kill.\n\n\
+BEFORE RAISING: peak build RAM is roughly 4.4x the .pbf size (the build is in-memory — no \
+streaming yet), so ensure about 4.4x that much free RAM, and separately at least 2x the \
+pbf size + 1 GiB of free disk.\n\n\
+STILL ENFORCED: the disk-headroom check (2x pbf + 1 GiB free) always applies, independent \
+of this flag.\n\n\
+PRECEDENCE: --max-pbf-gb overrides the ROUGHROUTE_MAX_PBF_BYTES env var, which overrides \
+the built-in 6 GB default."
+    )]
+    max_pbf_gb: Option<f64>,
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -132,9 +167,18 @@ fn main() {
 
 fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
     match cli.command {
-        Command::Build { pbf, pbf_url, out, profiles } => cmd_build(pbf, pbf_url, out, &profiles),
-        Command::Batch { manifest, out_dir, release_url_base, force, trust_index } => {
-            batch::cmd_batch(&manifest, &out_dir, release_url_base.as_deref(), force, trust_index)
+        Command::Build { pbf, pbf_url, out, profiles, gate } => {
+            cmd_build(pbf, pbf_url, out, &profiles, gate.max_pbf_gb)
+        }
+        Command::Batch { manifest, out_dir, release_url_base, force, trust_index, gate } => {
+            batch::cmd_batch(
+                &manifest,
+                &out_dir,
+                release_url_base.as_deref(),
+                force,
+                trust_index,
+                gate.max_pbf_gb,
+            )
         }
         Command::Route { graph, profile, via, format, max_snap_meters, no_fallback } => {
             cmd_route(&graph, profile, &via, format, max_snap_meters, no_fallback)
@@ -147,6 +191,7 @@ fn cmd_build(
     pbf_url: Option<String>,
     out: PathBuf,
     profiles: &[CliProfile],
+    max_pbf_gb: Option<f64>,
 ) -> Result<(), Box<dyn Error>> {
     // Resolve the input: a local path is used directly; a URL is downloaded
     // through the same safety gate `batch` uses (size probe, hard ceiling,
@@ -160,7 +205,9 @@ fn cmd_build(
             // use; a bare `--out name.graph` means the current directory.
             let dest_dir = out.parent().filter(|p| !p.as_os_str().is_empty());
             let dest_dir = dest_dir.unwrap_or_else(|| std::path::Path::new("."));
-            net::gate_download(&agent, &url, dest_dir, "download")?;
+            // Ceiling by precedence (flag > env > default); logged once if moved.
+            let max_pbf_bytes = net::resolve_max_pbf_ceiling(max_pbf_gb.map(net::gb_to_bytes));
+            net::gate_download(&agent, &url, dest_dir, "download", max_pbf_bytes)?;
             eprintln!("downloading {url} …");
             let pbf_path =
                 dest_dir.join(format!(".roughroute-download-{}.osm.pbf", std::process::id()));

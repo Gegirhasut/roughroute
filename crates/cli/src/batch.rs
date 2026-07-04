@@ -117,6 +117,7 @@ pub fn cmd_batch(
     release_url_base: Option<&str>,
     force: bool,
     trust_index: bool,
+    max_pbf_gb: Option<f64>,
 ) -> Result<(), Box<dyn Error>> {
     let manifest: Manifest = toml::from_str(&fs::read_to_string(manifest_path).map_err(
         |e| format!("cannot read manifest {}: {e}", manifest_path.display()),
@@ -133,6 +134,11 @@ pub fn cmd_batch(
 
     // One timeout-configured agent for every download this run (net::agent).
     let agent = net::agent();
+
+    // Resolve the .pbf size ceiling once for the whole run (flag > env >
+    // default); logged once here if it differs from the compiled default, so
+    // the whole batch shares one deliberate ceiling.
+    let max_pbf_bytes = net::resolve_max_pbf_ceiling(max_pbf_gb.map(net::gb_to_bytes));
 
     let existing = load_existing_index(&out_dir.join("index.json"));
     eprintln!(
@@ -183,7 +189,7 @@ pub fn cmd_batch(
         if per_region_peak {
             mem::reset_peak_rss();
         }
-        match build_region(&agent, region, out_dir, &tmp_dir, release_url_base) {
+        match build_region(&agent, region, out_dir, &tmp_dir, release_url_base, max_pbf_bytes) {
             Ok(entry) => {
                 let peak = mem::peak_rss_kib().map(mem::fmt_kib);
                 eprintln!(
@@ -355,12 +361,14 @@ fn build_region(
     out_dir: &Path,
     tmp_dir: &Path,
     release_url_base: Option<&str>,
+    max_pbf_bytes: u64,
 ) -> Result<IndexRegion, RegionError> {
     // 1. Shared pre-download safety gate (hard size ceiling + disk headroom).
     //    A gate failure aborts the whole run rather than risking a full disk;
     //    the .pbf lands next to the built graph, so headroom is checked on
     //    out_dir. No byte is fetched here beyond a HEAD request.
-    net::gate_download(agent, &region.pbf_url, out_dir, &region.id).map_err(RegionError::AbortRun)?;
+    net::gate_download(agent, &region.pbf_url, out_dir, &region.id, max_pbf_bytes)
+        .map_err(RegionError::AbortRun)?;
 
     // Free disk before the download — paired with the "after cleanup" line
     // below, this makes the per-region download→delete cycle visible in the
