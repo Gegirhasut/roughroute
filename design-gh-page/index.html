@@ -979,7 +979,13 @@ window.__rrLang = 'en';   // current UI language; runtime-generated strings (dem
     map = L.map('demoMap', {
       center: CFG.CENTER, zoom: CFG.ZOOM, minZoom: CFG.MIN_ZOOM, maxZoom: CFG.MAX_ZOOM,
       maxBounds: CFG.BBOX, maxBoundsViscosity: 1.0,
+      attributionControl: true,
     });
+    // Drop Leaflet's default prefix (it embeds a Ukrainian-flag SVG since
+    // v1.8.0) for a plain "Leaflet" link. Only the prefix changes — the
+    // © OpenStreetMap contributors © CARTO attribution (CFG.ATTRIBUTION on the
+    // tile layer below) is untouched, as ODbL requires.
+    map.attributionControl.setPrefix('<a href="https://leafletjs.com" title="A JavaScript library for interactive maps">Leaflet</a>');
     L.tileLayer(CFG.TILES, {
       subdomains: CFG.TILE_SUBDOMAINS, attribution: CFG.ATTRIBUTION, maxZoom: CFG.MAX_ZOOM,
     }).addTo(map);
