@@ -819,7 +819,8 @@ window.__rrLang = 'en';   // current UI language; runtime-generated strings (dem
     ATTRIBUTION: '&copy; OpenStreetMap contributors &copy; CARTO',
     // Per-region view (center/bounds/zoom) is derived from each region's bbox
     // in index.json at load time; only the outer zoom limits are global.
-    MIN_ZOOM: 3, MAX_ZOOM: 16,
+    // (CARTO's dark basemap serves tiles well past this, so max can grow.)
+    MIN_ZOOM: 3, MAX_ZOOM: 17,
   };
 
   /* runtime-generated strings (statuses, chip, toast); static labels use the
