@@ -1,0 +1,424 @@
+{
+  "schema_version": 1,
+  "format_version": 3,
+  "attribution": "© OpenStreetMap contributors (ODbL)",
+  "regions": [
+    {
+      "id": "cyprus",
+      "name": "Cyprus",
+      "file": "cyprus.graph",
+      "url": "https://github.com/Gegirhasut/roughroute/releases/download/graphs-v3/cyprus.graph",
+      "bytes": 20765042,
+      "sha256": "dea6548e3a237b0756ad8f0841a0a432d38aee523d5edc64c469fa6a6f8b4643",
+      "nodes": 267459,
+      "edges": 705406,
+      "bbox": [
+        34.5637876,
+        32.2700375,
+        35.6950463,
+        34.5875489
+      ],
+      "source_pbf_url": "https://download.geofabrik.de/europe/cyprus-latest.osm.pbf",
+      "format_version": 3,
+      "profiles": [
+        "car",
+        "foot"
+      ]
+    },
+    {
+      "id": "malta",
+      "name": "Malta",
+      "file": "malta.graph",
+      "url": "https://github.com/Gegirhasut/roughroute/releases/download/graphs-v3/malta.graph",
+      "bytes": 3354753,
+      "sha256": "4cfd0818b5822fa03bdde96099644906b328013f7d55a5f1666bf81e360f8e7d",
+      "nodes": 52291,
+      "edges": 134608,
+      "bbox": [
+        35.8065743,
+        14.1842043,
+        36.0820017,
+        14.5738916
+      ],
+      "source_pbf_url": "https://download.geofabrik.de/europe/malta-latest.osm.pbf",
+      "format_version": 3,
+      "profiles": [
+        "car",
+        "foot"
+      ]
+    },
+    {
+      "id": "andorra",
+      "name": "Andorra",
+      "file": "andorra.graph",
+      "url": "https://github.com/Gegirhasut/roughroute/releases/download/graphs-v3/andorra.graph",
+      "bytes": 1116661,
+      "sha256": "9151dd9bb69e0a79e929dd3e865b11cb83921da0e67668994c6e8f46b1c8c71c",
+      "nodes": 9998,
+      "edges": 28030,
+      "bbox": [
+        42.4182573,
+        1.4001186,
+        42.6761716,
+        1.7904396
+      ],
+      "source_pbf_url": "https://download.geofabrik.de/europe/andorra-latest.osm.pbf",
+      "format_version": 3,
+      "profiles": [
+        "car",
+        "foot"
+      ]
+    },
+    {
+      "id": "slovenia",
+      "name": "Slovenia",
+      "file": "slovenia.graph",
+      "url": "https://github.com/Gegirhasut/roughroute/releases/download/graphs-v3/slovenia.graph",
+      "bytes": 56382171,
+      "sha256": "653fe04a4bb3bb9ec4aaf1cc42744b245a3edd27ecbc4cf012a4e05219c367e6",
+      "nodes": 657343,
+      "edges": 1624974,
+      "bbox": [
+        45.4037255,
+        13.361467,
+        46.8889549,
+        16.5967069
+      ],
+      "source_pbf_url": "https://download.geofabrik.de/europe/slovenia-latest.osm.pbf",
+      "format_version": 3,
+      "profiles": [
+        "car",
+        "foot"
+      ]
+    },
+    {
+      "id": "switzerland",
+      "name": "Switzerland",
+      "file": "switzerland.graph",
+      "url": "https://github.com/Gegirhasut/roughroute/releases/download/graphs-v3/switzerland.graph",
+      "bytes": 185924498,
+      "sha256": "63c1149df7bc97f82a0a727aaf5ca98c2f3086f2b91498a06fbc3f0e6ef96cc2",
+      "nodes": 2374250,
+      "edges": 6235662,
+      "bbox": [
+        45.8132578,
+        5.9508778,
+        47.8110173,
+        10.5084652
+      ],
+      "source_pbf_url": "https://download.geofabrik.de/europe/switzerland-latest.osm.pbf",
+      "format_version": 3,
+      "profiles": [
+        "car",
+        "foot"
+      ]
+    },
+    {
+      "id": "kenya",
+      "name": "Kenya",
+      "file": "kenya.graph",
+      "url": "https://github.com/Gegirhasut/roughroute/releases/download/graphs-v3/kenya.graph",
+      "bytes": 110108568,
+      "sha256": "14a1dd293cc1f8b2c3abfe7d80a1d772fc4a2afd5a9e1307606201aaba1f0754",
+      "nodes": 1147985,
+      "edges": 2907376,
+      "bbox": [
+        -4.7306787,
+        33.9080515,
+        5.2806483,
+        42.0760913
+      ],
+      "source_pbf_url": "https://download.geofabrik.de/africa/kenya-latest.osm.pbf",
+      "format_version": 3,
+      "profiles": [
+        "car",
+        "foot"
+      ]
+    },
+    {
+      "id": "luxembourg",
+      "name": "Luxembourg",
+      "file": "luxembourg.graph",
+      "url": "https://github.com/Gegirhasut/roughroute/releases/download/graphs-v3/luxembourg.graph",
+      "bytes": 11565637,
+      "sha256": "b5d6f76459bba8471b30ce4d35d388997432eb65b309cafd8cc932e9231f9147",
+      "nodes": 151978,
+      "edges": 408016,
+      "bbox": [
+        49.4407299,
+        5.7264759,
+        50.1850883,
+        6.5340087
+      ],
+      "source_pbf_url": "https://download.geofabrik.de/europe/luxembourg-latest.osm.pbf",
+      "format_version": 3,
+      "profiles": [
+        "car",
+        "foot"
+      ]
+    },
+    {
+      "id": "moldova",
+      "name": "Moldova",
+      "file": "moldova.graph",
+      "url": "https://github.com/Gegirhasut/roughroute/releases/download/graphs-v3/moldova.graph",
+      "bytes": 35396818,
+      "sha256": "78e4fd0e3389378e1984ea64f233aefb9e473c8c43c38ad19235848093c2c1b0",
+      "nodes": 460542,
+      "edges": 1255600,
+      "bbox": [
+        45.4570659,
+        26.5689862,
+        48.502369,
+        30.2589773
+      ],
+      "source_pbf_url": "https://download.geofabrik.de/europe/moldova-latest.osm.pbf",
+      "format_version": 3,
+      "profiles": [
+        "car",
+        "foot"
+      ]
+    },
+    {
+      "id": "estonia",
+      "name": "Estonia",
+      "file": "estonia.graph",
+      "url": "https://github.com/Gegirhasut/roughroute/releases/download/graphs-v3/estonia.graph",
+      "bytes": 35759660,
+      "sha256": "1a81bc5b1f39ab841eceed89195dfef5b57bafa858ee4e77d0477fe32b25cef9",
+      "nodes": 508838,
+      "edges": 1334196,
+      "bbox": [
+        57.497427,
+        21.7878761,
+        59.818574,
+        28.2238141
+      ],
+      "source_pbf_url": "https://download.geofabrik.de/europe/estonia-latest.osm.pbf",
+      "format_version": 3,
+      "profiles": [
+        "car",
+        "foot"
+      ]
+    },
+    {
+      "id": "latvia",
+      "name": "Latvia",
+      "file": "latvia.graph",
+      "url": "https://github.com/Gegirhasut/roughroute/releases/download/graphs-v3/latvia.graph",
+      "bytes": 49567028,
+      "sha256": "018a24f98c0e76a82afdedf58138c3ba58a9d643ec0a1a12ecbc54ec9991304c",
+      "nodes": 713316,
+      "edges": 1864634,
+      "bbox": [
+        55.649665,
+        20.9714011,
+        58.1093156,
+        28.2573065
+      ],
+      "source_pbf_url": "https://download.geofabrik.de/europe/latvia-latest.osm.pbf",
+      "format_version": 3,
+      "profiles": [
+        "car",
+        "foot"
+      ]
+    },
+    {
+      "id": "iceland",
+      "name": "Iceland",
+      "file": "iceland.graph",
+      "url": "https://github.com/Gegirhasut/roughroute/releases/download/graphs-v3/iceland.graph",
+      "bytes": 13447775,
+      "sha256": "ea4bbe017ae80a4a0ef3e3df6b7e5a42644db69377896d73b91be3a6d45bee13",
+      "nodes": 159440,
+      "edges": 413840,
+      "bbox": [
+        63.3003532,
+        -24.5317653,
+        66.5658219,
+        -13.5145742
+      ],
+      "source_pbf_url": "https://download.geofabrik.de/europe/iceland-latest.osm.pbf",
+      "format_version": 3,
+      "profiles": [
+        "car",
+        "foot"
+      ]
+    },
+    {
+      "id": "montenegro",
+      "name": "Montenegro",
+      "file": "montenegro.graph",
+      "url": "https://github.com/Gegirhasut/roughroute/releases/download/graphs-v3/montenegro.graph",
+      "bytes": 12105307,
+      "sha256": "b9edcb9b8a3279662492e8729e80dd80b6d5551cdf3e770b23ffca3a340782a1",
+      "nodes": 118046,
+      "edges": 284364,
+      "bbox": [
+        41.8529427,
+        18.4213762,
+        43.562666,
+        20.3944187
+      ],
+      "source_pbf_url": "https://download.geofabrik.de/europe/montenegro-latest.osm.pbf",
+      "format_version": 3,
+      "profiles": [
+        "car",
+        "foot"
+      ]
+    },
+    {
+      "id": "austria",
+      "name": "Austria",
+      "file": "austria.graph",
+      "url": "https://github.com/Gegirhasut/roughroute/releases/download/graphs-v3/austria.graph",
+      "bytes": 247187032,
+      "sha256": "276c971a0456a3e1df3af7f8926e188f118daedae785ad00c4b2bf8e06c6e357",
+      "nodes": 3137154,
+      "edges": 7867760,
+      "bbox": [
+        46.3691647,
+        9.5003362,
+        49.0270459,
+        17.1785223
+      ],
+      "source_pbf_url": "https://download.geofabrik.de/europe/austria-latest.osm.pbf",
+      "format_version": 3,
+      "profiles": [
+        "car",
+        "foot"
+      ]
+    },
+    {
+      "id": "germany",
+      "name": "Germany",
+      "file": "germany.graph",
+      "url": "https://github.com/Gegirhasut/roughroute/releases/download/graphs-v3/germany.graph",
+      "bytes": 1354886417,
+      "sha256": "0f17bc7479d7e3f40d2dc08e2e53ae40a1a411fe099deaf79ce1840e2af5fde7",
+      "nodes": 19710197,
+      "edges": 52421908,
+      "bbox": [
+        47.2491573,
+        5.8630797,
+        55.0584017,
+        15.0973503
+      ],
+      "source_pbf_url": "https://download.geofabrik.de/europe/germany-latest.osm.pbf",
+      "format_version": 3,
+      "profiles": [
+        "car",
+        "foot"
+      ]
+    },
+    {
+      "id": "france",
+      "name": "France",
+      "file": "france.graph",
+      "url": "https://github.com/Gegirhasut/roughroute/releases/download/graphs-v3/france.graph",
+      "bytes": 1209597034,
+      "sha256": "d2c7923a7391248b5dd7887d4f2595e60bcd87389c6b0e9500fc4a9215cf2574",
+      "nodes": 15697803,
+      "edges": 41523384,
+      "bbox": [
+        41.3344034,
+        -5.1407376,
+        51.093328,
+        9.8355852
+      ],
+      "source_pbf_url": "https://download.geofabrik.de/europe/france-latest.osm.pbf",
+      "format_version": 3,
+      "profiles": [
+        "car",
+        "foot"
+      ]
+    },
+    {
+      "id": "italy",
+      "name": "Italy",
+      "file": "italy.graph",
+      "url": "https://github.com/Gegirhasut/roughroute/releases/download/graphs-v3/italy.graph",
+      "bytes": 692337678,
+      "sha256": "1494240dd724f9c28f5641e044e37d50fac500cd5b14758352222353e48c278d",
+      "nodes": 8459516,
+      "edges": 22207134,
+      "bbox": [
+        35.4937482,
+        6.6007144,
+        47.2518146,
+        18.5198801
+      ],
+      "source_pbf_url": "https://download.geofabrik.de/europe/italy-latest.osm.pbf",
+      "format_version": 3,
+      "profiles": [
+        "car",
+        "foot"
+      ]
+    },
+    {
+      "id": "russia",
+      "name": "Russia",
+      "file": "russia.graph",
+      "url": "https://github.com/Gegirhasut/roughroute/releases/download/graphs-v3/russia.graph",
+      "bytes": 1043103846,
+      "sha256": "372990f4f80e2727046607b49b5179cc3061b0fd720b5631773fa97e75dd7659",
+      "nodes": 13827281,
+      "edges": 37585064,
+      "bbox": [
+        41.1691359,
+        19.6029667,
+        81.1811617,
+        191.0767391
+      ],
+      "source_pbf_url": "https://download.geofabrik.de/russia-latest.osm.pbf",
+      "format_version": 3,
+      "profiles": [
+        "car",
+        "foot"
+      ]
+    },
+    {
+      "id": "us-california",
+      "name": "California, USA",
+      "file": "us-california.graph",
+      "url": "https://github.com/Gegirhasut/roughroute/releases/download/graphs-v3/us-california.graph",
+      "bytes": 460709207,
+      "sha256": "f0c4e3d9d88520cecade5db18af4ac3d193c5e58ee94a337510982e2f23f0577",
+      "nodes": 6078002,
+      "edges": 16737152,
+      "bbox": [
+        32.4951871,
+        -124.406428,
+        42.1938366,
+        -114.1254752
+      ],
+      "source_pbf_url": "https://download.geofabrik.de/north-america/us/california-latest.osm.pbf",
+      "format_version": 3,
+      "profiles": [
+        "car",
+        "foot"
+      ]
+    },
+    {
+      "id": "moscow-foot",
+      "name": "Moscow (foot)",
+      "file": "moscow-foot.graph",
+      "url": "https://github.com/Gegirhasut/roughroute/releases/download/graphs-v3/moscow-foot.graph",
+      "bytes": 38259813,
+      "sha256": "8bf586554b69d9bd35f7eda534395b7bb4728ebe28e1e726a54579ce1f599517",
+      "nodes": 580427,
+      "edges": 1720542,
+      "bbox": [
+        55.5144118,
+        37.2343692,
+        55.9492019,
+        37.9057324
+      ],
+      "source_pbf_url": "https://download.bbbike.org/osm/bbbike/Moscow/Moscow.osm.pbf",
+      "format_version": 3,
+      "profiles": [
+        "foot"
+      ]
+    }
+  ]
+}
