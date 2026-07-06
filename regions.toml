@@ -4,6 +4,11 @@
 # block and running `roughroute batch` (see README "Regional graphs").
 # Keep regions small-ish; the batch tool builds them one at a time and deletes
 # each source .pbf after building, but the .pbf itself must fit on disk.
+#
+# Optional per-region `profiles` key (default = car+foot): narrow a region to
+# specific routing profiles. Omit it to build both car and foot exactly as
+# before; set e.g. `profiles = ["foot"]` for a walking-only graph. A present-
+# but-empty list (`profiles = []`) is a hard error.
 
 [[region]]
 id = "cyprus"
@@ -113,3 +118,15 @@ pbf_url = "https://download.geofabrik.de/russia-latest.osm.pbf"
 id = "us-california"
 name = "California, USA"
 pbf_url = "https://download.geofabrik.de/north-america/us/california-latest.osm.pbf"
+
+# Foot-only city (2026-07-06): the worked example for the optional `profiles`
+# key. Geofabrik has no city-sized extracts, so the source is a BBBike city
+# extract (URL pattern https://download.bbbike.org/osm/bbbike/<City>/<City>.osm.pbf).
+# Moscow's .pbf is ~80 MB — well under the 6 GB size ceiling, so no
+# --max-pbf-gb override is needed. `profiles = ["foot"]` drops car-only roads
+# (motorways etc.), publishing a walking-only graph.
+[[region]]
+id = "moscow-foot"
+name = "Moscow (foot)"
+pbf_url = "https://download.bbbike.org/osm/bbbike/Moscow/Moscow.osm.pbf"
+profiles = ["foot"]

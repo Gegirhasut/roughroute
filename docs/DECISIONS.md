@@ -1204,3 +1204,45 @@ a surprise. Each notes the real fix if it ever becomes necessary.
   projection, the next lever is Tier 2 (external-sort disk spill of the
   directed-edge list, designed in D23, not implemented). Planet-scale
   extracts remain out of scope.
+
+## D26. Per-region profile selection + BBBike city extracts for sub-country regions (2026-07-06)
+
+**Problem.** Every region was hardcoded to build both profiles
+(`mask_access(car | foot)` in `batch`). Some regions are only wanted for one
+profile — a dense city as a *walking* graph, where car-only motorways are
+dead weight. And city-scale coverage has no Geofabrik source at all
+(Geofabrik publishes country/state extracts; there is no `moscow-latest`).
+
+**Decision — per-region `profiles` in the manifest.** `regions.toml`'s
+`[[region]]` gains an optional `profiles` key:
+
+- **Absent** → `car | foot`, byte-for-byte the previous behavior. This is the
+  backward-compatibility hinge: existing regions omit the key, so their
+  keep-mask, their `.graph` bytes, and their sha256 are all unchanged, and
+  the incremental skip keeps skipping them. No mass rebuild.
+- **Present** → fold the listed profiles' masks (e.g. `["foot"]` → foot only).
+- **Present but empty (`[]`)** → hard validation error, never a silent empty
+  graph.
+
+The "profiles → keep-mask" fold is one shared helper (`cli::keep_mask`, over
+the now-public `CliProfile`) used by *both* `batch`'s per-region path and the
+`build --profiles` CLI, so the two can't drift. `index.json` gains a
+`profiles: ["foot"]` / `["car","foot"]` field so a host app can label regions;
+it is **informational only** — deliberately excluded from the freshness /
+`--trust-index` checks (`cached_entry_is_fresh` / `index_entry_is_trustworthy`
+ignore it), so introducing the field can't make an existing entry look stale.
+Its serde default (for pre-field `index.json` files) is the historical
+`["car","foot"]` pair, not an empty set — an old entry reads back as the graph
+it actually was.
+
+**Source for sub-country (city) regions — BBBike city extracts.** For a city
+that Geofabrik doesn't publish, point `pbf_url` at a
+[BBBike](https://download.bbbike.org/osm/bbbike/) per-city extract (URL
+pattern `https://download.bbbike.org/osm/bbbike/<City>/<City>.osm.pbf`), or a
+self-hosted custom-bbox extract. BBBike gives ready-made `.osm.pbf`s for ~200
+cities at city size — Moscow's is ~80 MB, far under the 6 GB ceiling (D24), so
+no gate override is needed. **Worked example:** the `moscow-foot` region
+(`profiles = ["foot"]`, BBBike Moscow extract) added with this decision — the
+first sub-country and first single-profile region. All-Russia stays excluded
+for the D24 antimeridian reason; a *city* extract sidesteps that entirely
+(Moscow is nowhere near the ±180° seam).

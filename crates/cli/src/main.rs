@@ -17,6 +17,7 @@ use std::path::PathBuf;
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use roughroute_build::{build_graph_compact, read_road_network};
 use roughroute_core::{Graph, Profile, RouteOptions, Router};
+use serde::Deserialize;
 
 #[derive(Parser)]
 #[command(
@@ -136,8 +137,15 @@ the built-in 6 GB default."
     max_pbf_gb: Option<f64>,
 }
 
-#[derive(Clone, Copy, ValueEnum)]
-enum CliProfile {
+/// A routing profile as named on the command line or in `regions.toml`.
+///
+/// Public and `Deserialize` so `batch`'s per-region `profiles` key can reuse
+/// exactly this enum (and its [`Profile`] mapping and the [`keep_mask`]
+/// helper below), instead of a parallel definition that could drift. The
+/// serde and clap spellings agree: lowercase `car` / `foot`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CliProfile {
     Car,
     Foot,
 }
@@ -149,6 +157,16 @@ impl From<CliProfile> for Profile {
             CliProfile::Foot => Profile::Foot,
         }
     }
+}
+
+/// Fold a set of CLI profiles into the edge-access keep-mask that narrows a
+/// graph to just those profiles: the bitwise OR of each profile's
+/// [`Profile::mask`]. The single source both `build --profiles` and `batch`'s
+/// per-region `profiles` key go through, so the two paths cannot compute the
+/// mask differently. An empty slice yields `0` (keep nothing) — callers that
+/// treat "no profiles selected" as an error must reject it before this.
+pub fn keep_mask(profiles: &[CliProfile]) -> u8 {
+    profiles.iter().map(|&p| Profile::from(p).mask()).fold(0, |acc, m| acc | m)
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -228,11 +246,10 @@ fn build_from_pbf(
     out: &std::path::Path,
     profiles: &[CliProfile],
 ) -> Result<(), Box<dyn Error>> {
-    let keep_mask: u8 = profiles.iter().map(|&p| Profile::from(p).mask()).fold(0, |a, m| a | m);
-
     let mut network = read_road_network(pbf_path)?;
-    // `--profiles` narrows the graph to ways usable by the selected profiles.
-    network.mask_access(keep_mask);
+    // `--profiles` narrows the graph to ways usable by the selected profiles
+    // (shared keep-mask helper — the same one `batch` uses per region).
+    network.mask_access(keep_mask(profiles));
     let (graph, stats) = build_graph_compact(network)?;
     let bytes = graph.to_bytes();
     fs::write(out, &bytes)?;

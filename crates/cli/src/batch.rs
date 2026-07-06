@@ -42,6 +42,7 @@ use sha2::{Digest, Sha256};
 
 use crate::mem;
 use crate::net;
+use crate::{keep_mask, CliProfile};
 
 /// The committed region manifest (`regions.toml`, D17).
 #[derive(Deserialize)]
@@ -58,6 +59,48 @@ struct ManifestRegion {
     name: String,
     /// Geofabrik (or compatible) `.osm.pbf` URL.
     pbf_url: String,
+    /// Which routing profiles to build this region for. Absent (the default)
+    /// keeps both car and foot exactly as before; present narrows the graph
+    /// to the listed profiles (e.g. `profiles = ["foot"]` for a walking-only
+    /// city). A present-but-empty list is rejected by [`validate_manifest`] —
+    /// we never silently build an empty graph.
+    #[serde(default)]
+    profiles: Option<Vec<CliProfile>>,
+}
+
+/// The edge-access keep-mask for a region: absent `profiles` keeps both
+/// profiles (`car | foot`, the historical behavior), a present list folds the
+/// selected profiles' masks. Goes through the same [`keep_mask`] helper the
+/// `build --profiles` CLI path uses, so the batch and one-off paths can't
+/// drift. Assumes a present list is non-empty (enforced upstream by
+/// [`validate_manifest`]), so the returned mask is never 0.
+fn region_keep_mask(region: &ManifestRegion) -> u8 {
+    match &region.profiles {
+        None => keep_mask(&[CliProfile::Car, CliProfile::Foot]),
+        Some(profiles) => keep_mask(profiles),
+    }
+}
+
+/// The profile labels ("car"/"foot") a keep-mask selects, in `car`-then-`foot`
+/// order, for the informational `profiles` field of an [`IndexRegion`]. Purely
+/// descriptive — never consulted by the staleness/skip decision.
+fn profiles_from_mask(mask: u8) -> Vec<String> {
+    let mut names = Vec::new();
+    if mask & Profile::Car.mask() != 0 {
+        names.push("car".to_string());
+    }
+    if mask & Profile::Foot.mask() != 0 {
+        names.push("foot".to_string());
+    }
+    names
+}
+
+/// The historical both-profiles value, used as the serde default for an
+/// [`IndexRegion`]'s `profiles` field so an older `index.json` written before
+/// the field existed reads back as the car+foot graph it actually was — not as
+/// an empty/unknown profile set.
+fn default_profiles() -> Vec<String> {
+    vec!["car".to_string(), "foot".to_string()]
 }
 
 /// The published discovery index (`index.json`, D17).
@@ -102,6 +145,18 @@ struct IndexRegion {
     /// never matches a real version — such entries are always rebuilt).
     #[serde(default)]
     format_version: u16,
+    /// Which routing profiles this graph was built for (e.g. `["foot"]` or
+    /// `["car","foot"]`), so the host app can label foot-only vs car+foot
+    /// regions. Derived from the keep-mask actually used for the region.
+    ///
+    /// **Informational only** — deliberately *not* part of the freshness /
+    /// skip decision ([`cached_entry_is_fresh`] / [`index_entry_is_trustworthy`]
+    /// ignore it), so introducing the field cannot make an existing region
+    /// look stale and force a rebuild. Missing in `index.json` files written
+    /// before the field existed: it then defaults to the historical car+foot
+    /// pair via [`default_profiles`] rather than an empty/unknown set.
+    #[serde(default = "default_profiles")]
+    profiles: Vec<String>,
 }
 
 /// A region failure that must stop the whole run (disk safety) vs one that
@@ -349,6 +404,17 @@ fn validate_manifest(manifest: &Manifest) -> Result<(), Box<dyn Error>> {
         if r.name.is_empty() || r.pbf_url.is_empty() {
             return Err(format!("region '{}' needs both name and pbf_url", r.id).into());
         }
+        // A present-but-empty `profiles = []` would fold to a 0 keep-mask and
+        // build an empty graph — almost certainly a mistake. Reject it loudly:
+        // omit the key to build both profiles, or list at least one.
+        if matches!(&r.profiles, Some(p) if p.is_empty()) {
+            return Err(format!(
+                "region '{}' has an empty `profiles` list; omit the key to build \
+                 car+foot, or list at least one profile (e.g. profiles = [\"foot\"])",
+                r.id
+            )
+            .into());
+        }
     }
     Ok(())
 }
@@ -380,10 +446,14 @@ fn build_region(
     let downloaded = net::download(agent, &region.pbf_url, &pbf_path).map_err(RegionError::Skip);
 
     // 3–4. Build + verify, with the .pbf removed afterwards no matter what.
+    // The profiles to keep for this region (absent -> car+foot, unchanged;
+    // present -> the listed profiles), computed once so the mask that narrows
+    // the graph and the `profiles` recorded in index.json can't disagree.
+    let keep = region_keep_mask(region);
     let result = downloaded.and_then(|_| {
         let mut network = roughroute_build::read_road_network(&pbf_path)
             .map_err(|e| RegionError::Skip(format!("pbf read failed: {e}")))?;
-        network.mask_access(Profile::Car.mask() | Profile::Foot.mask());
+        network.mask_access(keep);
         let (graph, _) = roughroute_build::build_graph_compact(network)
             .map_err(|e| RegionError::Skip(format!("graph build failed: {e}")))?;
         let file = format!("{}.graph", region.id);
@@ -408,6 +478,7 @@ fn build_region(
             file,
             source_pbf_url: region.pbf_url.clone(),
             format_version: roughroute_core::format::VERSION,
+            profiles: profiles_from_mask(keep),
         })
     });
 
@@ -569,6 +640,62 @@ mod tests {
     }
 
     #[test]
+    fn manifest_profiles_default_absent_and_parse_a_foot_only_region() {
+        // Backward-compatible: an entry with no `profiles` key parses to None
+        // and keeps building both profiles (region_keep_mask -> car|foot).
+        let manifest: Manifest = toml::from_str(
+            r#"
+            [[region]]
+            id = "cyprus"
+            name = "Cyprus"
+            pbf_url = "https://example.invalid/cyprus.osm.pbf"
+
+            [[region]]
+            id = "moscow-foot"
+            name = "Moscow (foot)"
+            pbf_url = "https://example.invalid/moscow.osm.pbf"
+            profiles = ["foot"]
+            "#,
+        )
+        .unwrap();
+        validate_manifest(&manifest).unwrap();
+
+        assert!(manifest.regions[0].profiles.is_none());
+        assert_eq!(
+            region_keep_mask(&manifest.regions[0]),
+            Profile::Car.mask() | Profile::Foot.mask()
+        );
+
+        assert_eq!(manifest.regions[1].profiles.as_deref(), Some(&[CliProfile::Foot][..]));
+        assert_eq!(region_keep_mask(&manifest.regions[1]), Profile::Foot.mask());
+    }
+
+    #[test]
+    fn manifest_rejects_present_but_empty_profiles() {
+        let empty: Manifest = toml::from_str(
+            r#"[[region]]
+               id = "x"
+               name = "X"
+               pbf_url = "u"
+               profiles = []"#,
+        )
+        .unwrap();
+        // Present-but-empty is a hard error — never silently an empty graph.
+        let err = validate_manifest(&empty).unwrap_err().to_string();
+        assert!(err.contains("empty `profiles`"), "unhelpful message: {err}");
+    }
+
+    #[test]
+    fn profiles_from_mask_labels_car_then_foot() {
+        assert_eq!(profiles_from_mask(Profile::Foot.mask()), vec!["foot"]);
+        assert_eq!(profiles_from_mask(Profile::Car.mask()), vec!["car"]);
+        assert_eq!(
+            profiles_from_mask(Profile::Car.mask() | Profile::Foot.mask()),
+            vec!["car", "foot"]
+        );
+    }
+
+    #[test]
     fn verify_accepts_a_real_graph_and_rejects_junk() {
         // A tiny two-way town through the real build pipeline.
         let coords: std::collections::BTreeMap<i64, [f64; 2]> =
@@ -624,6 +751,7 @@ mod tests {
             bbox: [34.5, 32.2, 35.7, 34.6],
             source_pbf_url: "https://example.invalid/cyprus.osm.pbf".into(),
             format_version: roughroute_core::format::VERSION,
+            profiles: default_profiles(),
         }
     }
 
@@ -678,6 +806,7 @@ mod tests {
             id: "cyprus".into(),
             name: "Cyprus".into(),
             pbf_url: "https://example.invalid/cyprus.osm.pbf".into(),
+            profiles: None,
         }
     }
 
@@ -833,6 +962,41 @@ mod tests {
             .is_none());
 
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn profiles_are_not_part_of_the_freshness_or_trust_decision() {
+        // Adding `profiles` must not make any existing region look stale.
+        // A cached entry whose profiles differ from (or are absent, defaulting
+        // to car+foot) whatever the region would build is still trusted and
+        // still fresh, because neither check consults the field.
+        let dir = std::env::temp_dir().join(format!("rr-batch-prof-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("cyprus.graph");
+        let bytes = b"pretend graph bytes";
+        fs::write(&path, bytes).unwrap();
+
+        let mut entry = sample_entry();
+        entry.bytes = bytes.len() as u64;
+        entry.sha256 = sha256_hex(bytes);
+        entry.profiles = vec!["foot".into()]; // deliberately not the default pair
+        assert!(cached_entry_is_fresh(&entry, &path));
+        assert!(index_entry_is_trustworthy(&sample_region(), &entry));
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn index_missing_profiles_defaults_to_car_and_foot() {
+        // A pre-`profiles` index.json entry reads back as the car+foot pair it
+        // actually was, not an empty/unknown set (default_profiles).
+        let old_schema = r#"{"schema_version":1,"format_version":3,
+            "attribution":"x","regions":[{"id":"malta","name":"Malta",
+            "file":"malta.graph","url":"u","bytes":1,"sha256":"ab",
+            "nodes":1,"edges":1,"bbox":[0.0,0.0,0.0,0.0],
+            "source_pbf_url":"u","format_version":3}]}"#;
+        let idx: ExistingIndex = serde_json::from_str(old_schema).unwrap();
+        assert_eq!(idx.regions[0].profiles, vec!["car", "foot"]);
     }
 
     #[test]

@@ -89,7 +89,9 @@ so route-spoofer (or any host app) can download them by URL and cache them
 locally; the router itself never touches the network (delivery is the host
 app's job). The discovery entry point is **`index.json`**, published
 alongside the graphs: it maps each region to its download URL, size in
-bytes, SHA-256, node/edge counts, bbox, and the `.graph` **format version**.
+bytes, SHA-256, node/edge counts, bbox, the routing **profiles** it was built
+for (`["car","foot"]` or e.g. `["foot"]`), and the `.graph` **format
+version**.
 The app should verify the hash after download, and must check the format
 version (also embedded in every `.graph` header) — the router refuses
 mismatched versions with `UnsupportedVersion`, so ship graphs rebuilt for
@@ -109,6 +111,57 @@ id = "malta"
 name = "Malta"
 pbf_url = "https://download.geofabrik.de/europe/malta-latest.osm.pbf"
 ```
+
+**Optional `profiles` key (default = car+foot).** Omit it and the region is
+built for both profiles, exactly as before. Set it to narrow a region to
+specific routing profiles — the graph then drops any road the listed profiles
+can't use (a car-only motorway is dropped from a foot-only graph, and vice
+versa). This mirrors the `build` CLI's `--profiles` flag, per region:
+
+```toml
+[[region]]
+id = "moscow-foot"
+name = "Moscow (foot)"
+pbf_url = "https://download.bbbike.org/osm/bbbike/Moscow/Moscow.osm.pbf"
+profiles = ["foot"]   # walking-only; default (key omitted) is ["car", "foot"]
+```
+
+A present-but-empty `profiles = []` is rejected (it would build an empty
+graph). The profiles a region was built for are recorded in `index.json`
+(`"profiles": ["foot"]` / `["car","foot"]`) so a host app can label foot-only
+vs car+foot regions. The field is informational only — it is **not** part of
+the incremental skip decision, so adding it never forces existing regions to
+rebuild.
+
+### Adding a foot-only city
+
+City-scale walking graphs are handy, but Geofabrik only publishes
+country/state-sized extracts — there's no `moscow-latest.osm.pbf`. Two source
+options give you a city:
+
+- **[BBBike city extracts](https://download.bbbike.org/osm/bbbike/)** —
+  ready-made per-city `.osm.pbf`s for ~200 cities, URL pattern
+  `https://download.bbbike.org/osm/bbbike/<City>/<City>.osm.pbf` (e.g.
+  `.../Moscow/Moscow.osm.pbf`, ~80 MB — comfortably under the 6 GB size
+  ceiling, no `--max-pbf-gb` override needed).
+- **A self-hosted custom bbox extract** — clip your own bounding box with
+  `osmium extract`/BBBike's custom-extract service and host the `.pbf`
+  anywhere reachable by URL.
+
+Then append the region with `profiles = ["foot"]`, push, and CI builds and
+publishes it. Worked example — `moscow-foot`, already in `regions.toml`:
+
+```toml
+[[region]]
+id = "moscow-foot"
+name = "Moscow (foot)"
+pbf_url = "https://download.bbbike.org/osm/bbbike/Moscow/Moscow.osm.pbf"
+profiles = ["foot"]
+```
+
+Pushing that change to `regions.toml` triggers the build workflow (below); the
+run is incremental, so only the new `moscow-foot` region builds and gets
+published — every existing region is skipped untouched.
 
 ### Running the batch build
 

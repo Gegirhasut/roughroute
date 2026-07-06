@@ -1010,6 +1010,52 @@ mod tests {
     }
 
     #[test]
+    fn foot_only_keep_mask_yields_a_graph_with_no_car_only_edges() {
+        // The `batch`/`build` profile filter at graph level: a network mixing
+        // a car-only road, a foot-only path, and an ordinary both-profiles
+        // road, narrowed to foot only (exactly `network.mask_access(foot)`, as
+        // a `profiles = ["foot"]` region does). The result must contain no
+        // car-only edge: every surviving edge is foot-usable, and the car-only
+        // road is dropped entirely.
+        use roughroute_core::profile::{ACCESS_CAR, ACCESS_FOOT};
+        let mut net = CompactNetwork::new();
+        net.push_way([1i64, 2], ACCESS_CAR); // motorway-ish: car only
+        net.push_way([3i64, 4], ACCESS_FOOT); // footway: foot only
+        net.push_way([5i64, 6], ACCESS_ALL); // ordinary road: both
+        net.node_ids = vec![1, 2, 3, 4, 5, 6];
+        net.node_coords = [
+            (35.00, 33.00),
+            (35.00, 33.01),
+            (35.01, 33.00),
+            (35.01, 33.01),
+            (35.02, 33.00),
+            (35.02, 33.01),
+        ]
+        .iter()
+        .map(|&(lat, lon)| [geo::deg_to_fixed(lat), geo::deg_to_fixed(lon)])
+        .collect();
+
+        net.mask_access(Profile::Foot.mask());
+        let (g, _) = build_graph_compact(net).unwrap();
+
+        let (foot, car) = (Profile::Foot.mask(), Profile::Car.mask());
+        let mut edge_count = 0;
+        for n in 0..g.node_count() {
+            for e in g.edges_from(n) {
+                edge_count += 1;
+                // Foot bit present (usable on foot) — so no edge is car-only.
+                assert!(e.access & foot != 0, "surviving edge {e:?} lost the foot bit");
+                // And the foot-only mask cleared every car bit outright.
+                assert!(e.access & car == 0, "car access survived a foot-only mask: {e:?}");
+            }
+        }
+        // Foot path + both road survive (2 directed edges each); the car-only
+        // road and its now-edgeless nodes are gone.
+        assert_eq!(edge_count, 4);
+        assert_eq!(g.node_count(), 4);
+    }
+
+    #[test]
     fn compact_direct_and_adapter_paths_build_identical_bytes() {
         // The D23 safety spine at unit level: a hand-assembled CompactNetwork
         // (as the pbf front-end would produce — sorted quantized node table,
