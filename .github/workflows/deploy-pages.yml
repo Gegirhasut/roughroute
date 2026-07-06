@@ -4,14 +4,16 @@
 # The live demo on the page needs three things next to index.html, all staged
 # here so the demo updates automatically:
 #   pkg/          — the wasm-pack --target web build of crates/wasm
-#   cyprus.graph  — the demo region graph, copied from the graphs-v3 release.
-#                   Release-asset URLs send no CORS headers (verified: neither
-#                   the github.com 302 nor release-assets.githubusercontent.com
-#                   answers an Origin), so the browser can ONLY fetch the graph
-#                   same-origin — shipping it inside the site is the fix, not
-#                   an optimization.
+#   <id>.graph    — the demo region graphs (DEMO_REGIONS below), copied from
+#                   the graphs-v3 release. Release-asset URLs send no CORS
+#                   headers (verified: neither the github.com 302 nor
+#                   release-assets.githubusercontent.com answers an Origin), so
+#                   the browser can ONLY fetch a graph same-origin — shipping
+#                   them inside the site is the fix, not an optimization. The
+#                   page's region switcher (CFG.REGIONS in index.html) offers
+#                   exactly this set; keep the two lists in sync.
 #   index.json    — same-origin copy of the release index; the demo resolves
-#                   the graph's sha256 + exact byte size from it.
+#                   each graph's sha256 + exact byte size + bbox + profiles from it.
 #
 # gh-pages is a generated snapshot of design-gh-page/ on main (force-pushed
 # each deploy) — edit the page on main, never on gh-pages.
@@ -39,7 +41,11 @@ permissions:
 
 env:
   RELEASE_TAG: graphs-v3
-  DEMO_REGION: cyprus
+  # Regions staged same-origin for the live-demo switcher. MUST match
+  # CFG.REGIONS in design-gh-page/index.html. Keep to SMALL regions — each is
+  # committed into the gh-pages snapshot (release assets send no CORS headers,
+  # so the browser can only fetch a .graph from this same origin).
+  DEMO_REGIONS: "cyprus moscow-foot malta andorra luxembourg iceland"
 
 jobs:
   deploy:
@@ -63,17 +69,20 @@ jobs:
       - name: Build the WASM module
         run: wasm-pack build crates/wasm --release --target web --out-dir "$GITHUB_WORKSPACE/design-gh-page/pkg"
 
-      - name: Stage the demo graph + index (same-origin copies)
+      - name: Stage the demo graphs + index (same-origin copies)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          gh release download "$RELEASE_TAG" \
-            --pattern "${DEMO_REGION}.graph" --pattern index.json \
-            --dir design-gh-page --clobber
+          # One --pattern per demo region, plus the index — a skipped region's
+          # asset is never rewritten, so this only pulls what the demo serves.
+          patterns=(--pattern index.json)
+          for r in $DEMO_REGIONS; do patterns+=(--pattern "${r}.graph"); done
+          gh release download "$RELEASE_TAG" "${patterns[@]}" --dir design-gh-page --clobber
           # wasm-pack writes pkg/.gitignore with '*' — it would empty the
           # publish commit below.
           rm -f design-gh-page/pkg/.gitignore
+          echo "Staged same-origin graphs:"; ls -lh design-gh-page/*.graph
 
       - name: Publish design-gh-page/ to the gh-pages branch
         run: |
