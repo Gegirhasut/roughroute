@@ -560,7 +560,7 @@ roughroute <span class="g">route</span> --graph cyprus.graph --profile car \
 
       <div class="demo-overlay" id="demoIdle">
         <button class="btn demo-load" id="demoLoadBtn" data-en="Load live demo" data-ru="Загрузить живое демо" data-zh="加载在线演示" data-es="Cargar demo en vivo" data-de="Live-Demo laden" data-fr="Charger la démo" data-pt="Carregar demo ao vivo" data-ja="ライブデモを読み込む" data-ar="تحميل التجربة الحيّة">Load live demo</button>
-        <p class="demo-note" data-en="One-time download, cached for repeat visits. Map tiles © OpenStreetMap contributors © CARTO — the routing itself runs locally." data-ru="Однократная загрузка, кэшируется для повторных визитов. Тайлы карты © OpenStreetMap contributors © CARTO — сама маршрутизация выполняется локально." data-zh="一次性下载，缓存后再次访问即时可用。地图瓦片 © OpenStreetMap contributors © CARTO——路由本身在本地运行。" data-es="Descarga única, cacheada para visitas posteriores. Teselas del mapa © OpenStreetMap contributors © CARTO — el enrutamiento corre localmente." data-de="Einmaliger Download, für weitere Besuche gecacht. Kartenkacheln © OpenStreetMap contributors © CARTO — das Routing selbst läuft lokal." data-fr="Téléchargement unique, mis en cache pour les visites suivantes. Tuiles © OpenStreetMap contributors © CARTO — le routage lui-même tourne localement." data-pt="Download único, em cache para visitas futuras. Tiles do mapa © OpenStreetMap contributors © CARTO — o roteamento em si roda localmente." data-ja="ダウンロードは一度だけ、再訪問時のためにキャッシュされます。地図タイル © OpenStreetMap contributors © CARTO — ルーティング自体はローカルで実行されます。" data-ar="تنزيل لمرة واحدة، يُخزَّن مؤقتًا للزيارات اللاحقة. بلاطات الخريطة © OpenStreetMap contributors © CARTO — أما التوجيه نفسه فيعمل محليًا.">One-time download, cached for repeat visits. Map tiles © OpenStreetMap contributors © CARTO — the routing itself runs locally.</p>
+        <p class="demo-note" data-en="One-time download, cached for repeat visits. Map tiles © OpenFreeMap © OpenMapTiles © OpenStreetMap contributors — the routing itself runs locally." data-ru="Однократная загрузка, кэшируется для повторных визитов. Тайлы карты © OpenFreeMap © OpenMapTiles © OpenStreetMap contributors — сама маршрутизация выполняется локально." data-zh="一次性下载，缓存后再次访问即时可用。地图瓦片 © OpenFreeMap © OpenMapTiles © OpenStreetMap contributors——路由本身在本地运行。" data-es="Descarga única, cacheada para visitas posteriores. Teselas del mapa © OpenFreeMap © OpenMapTiles © OpenStreetMap contributors — el enrutamiento corre localmente." data-de="Einmaliger Download, für weitere Besuche gecacht. Kartenkacheln © OpenFreeMap © OpenMapTiles © OpenStreetMap contributors — das Routing selbst läuft lokal." data-fr="Téléchargement unique, mis en cache pour les visites suivantes. Tuiles © OpenFreeMap © OpenMapTiles © OpenStreetMap contributors — le routage lui-même tourne localement." data-pt="Download único, em cache para visitas futuras. Tiles do mapa © OpenFreeMap © OpenMapTiles © OpenStreetMap contributors — o roteamento em si roda localmente." data-ja="ダウンロードは一度だけ、再訪問時のためにキャッシュされます。地図タイル © OpenFreeMap © OpenMapTiles © OpenStreetMap contributors — ルーティング自体はローカルで実行されます。" data-ar="تنزيل لمرة واحدة، يُخزَّن مؤقتًا للزيارات اللاحقة. بلاطات الخريطة © OpenFreeMap © OpenMapTiles © OpenStreetMap contributors — أما التوجيه نفسه فيعمل محليًا.">One-time download, cached for repeat visits. Map tiles © OpenFreeMap © OpenMapTiles © OpenStreetMap contributors — the routing itself runs locally.</p>
       </div>
 
       <div class="demo-overlay" id="demoProgress" hidden>
@@ -814,12 +814,22 @@ window.__rrLang = 'en';   // current UI language; runtime-generated strings (dem
     LEAFLET_JS:  'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js',
     LEAFLET_CSS_SRI: 'sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=',
     LEAFLET_JS_SRI:  'sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=',
-    TILES: 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
-    TILE_SUBDOMAINS: 'abcd',
-    ATTRIBUTION: '&copy; OpenStreetMap contributors &copy; CARTO',
+    // Basemap: OpenFreeMap vector style (key-less) rendered inside Leaflet by
+    // MapLibre GL + @maplibre/maplibre-gl-leaflet — the same setup as the app.
+    // Falls back to OSM standard raster tiles when MapLibre/WebGL is unavailable
+    // or the style fails before its first load.
+    MAPLIBRE_CSS: 'https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.css',
+    MAPLIBRE_JS:  'https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.js',
+    MAPLIBRE_LEAFLET_JS: 'https://unpkg.com/@maplibre/maplibre-gl-leaflet@0.1.4/leaflet-maplibre-gl.js',
+    MAPLIBRE_CSS_SRI: 'sha384-uTttxo/aOKbdE5RlD/SPzSDoDmNvGlUYPjONi2MN/b7c9HPSvW07OIuyP7uL6jxK',
+    MAPLIBRE_JS_SRI:  'sha384-5+cfbwT0iiub6VsQAdn6yz16nr6sDiQoHx6tm4O8OVYXHYOxcffFmCJBL0dgdvGp',
+    MAPLIBRE_LEAFLET_JS_SRI: 'sha384-tXYNKOHx4T02jMP7YYCtBxPIv1B5gaA5mcVPBzqMp6d7VzWzxJgI2aWF/nJLrQdS',
+    VECTOR_STYLE: 'https://tiles.openfreemap.org/styles/positron',
+    VECTOR_ATTRIBUTION: '<a href="https://openfreemap.org">OpenFreeMap</a> &copy; <a href="https://www.openmaptiles.org/">OpenMapTiles</a> Data from <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+    RASTER_TILES: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+    RASTER_ATTRIBUTION: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
     // Per-region view (center/bounds/zoom) is derived from each region's bbox
     // in index.json at load time; only the outer zoom limits are global.
-    // (CARTO's dark basemap serves tiles well past this, so max can grow.)
     MIN_ZOOM: 3, MAX_ZOOM: 17,
   };
 
@@ -998,8 +1008,30 @@ window.__rrLang = 'en';   // current UI language; runtime-generated strings (dem
       s.onload = ()=> resolve();               // never reference L before this fires
       s.onerror = ()=>{ leafletPromise = null; reject(new Error('Leaflet failed to load from unpkg')); };
       document.head.appendChild(s);
-    });
+    }).then(loadMaplibre);
     return leafletPromise;
+  }
+
+  /* MapLibre + its Leaflet bridge (the bridge needs L, so it loads after
+     Leaflet). Optional: any failure resolves anyway and the map falls back to
+     OSM raster tiles in installBasemap. */
+  function loadScript(src, sri){
+    return new Promise((resolve, reject)=>{
+      const s = document.createElement('script');
+      s.src = src; s.integrity = sri; s.crossOrigin = 'anonymous';
+      s.onload = ()=> resolve(); s.onerror = ()=> reject(new Error('failed to load ' + src));
+      document.head.appendChild(s);
+    });
+  }
+  function loadMaplibre(){
+    if(window.maplibregl && L.maplibreGL) return Promise.resolve();
+    const link = document.createElement('link');
+    link.rel = 'stylesheet'; link.href = CFG.MAPLIBRE_CSS;
+    link.integrity = CFG.MAPLIBRE_CSS_SRI; link.crossOrigin = 'anonymous';
+    document.head.appendChild(link);
+    return loadScript(CFG.MAPLIBRE_JS, CFG.MAPLIBRE_JS_SRI)
+      .then(()=> loadScript(CFG.MAPLIBRE_LEAFLET_JS, CFG.MAPLIBRE_LEAFLET_JS_SRI))
+      .catch(e => console.warn('[map] MapLibre unavailable, will use raster tiles', e));
   }
 
   async function fetchGraph(rg){
@@ -1076,14 +1108,59 @@ window.__rrLang = 'en';   // current UI language; runtime-generated strings (dem
     });
     // Drop Leaflet's default prefix (it embeds a Ukrainian-flag SVG since
     // v1.8.0) for a plain "Leaflet" link. Only the prefix changes — the
-    // © OpenStreetMap contributors © CARTO attribution (CFG.ATTRIBUTION on the
-    // tile layer below) is untouched, as ODbL requires.
+    // basemap's OpenStreetMap attribution (set on the layer in installBasemap)
+    // is untouched, as ODbL requires.
     map.attributionControl.setPrefix('<a href="https://leafletjs.com" title="A JavaScript library for interactive maps">Leaflet</a>');
-    L.tileLayer(CFG.TILES, {
-      subdomains: CFG.TILE_SUBDOMAINS, attribution: CFG.ATTRIBUTION, maxZoom: CFG.MAX_ZOOM,
-    }).addTo(map);
+    installBasemap();
     map.on('click', e => { if(router) addWaypoint([e.latlng.lat, e.latlng.lng]); });
     map.on('zoomstart', unDash);               // a reprojection invalidates dash lengths
+  }
+
+  /* Exactly one basemap is on the map at a time. The vector layer is tried only
+     when MapLibre loaded and WebGL exists; a throw while creating it, or a
+     MapLibre 'error' before its first 'load' (style/tiles unreachable), swaps
+     it for the OSM raster layer. */
+  let basemap = null;
+  function hasWebGL(){
+    try{
+      const c = document.createElement('canvas');
+      return !!(window.WebGLRenderingContext && (c.getContext('webgl') || c.getContext('experimental-webgl')));
+    }catch(_){ return false; }
+  }
+  function useRasterBasemap(){
+    basemap = L.tileLayer(CFG.RASTER_TILES, { attribution: CFG.RASTER_ATTRIBUTION, maxZoom: CFG.MAX_ZOOM }).addTo(map);
+  }
+  function dropVectorBasemap(layer){
+    // The plugin's onRemove assumes a live GL map; give it a no-op one if the
+    // MapLibre constructor threw, so Leaflet can finish detaching the layer.
+    if(!layer._glMap) layer._glMap = { remove(){} };
+    try{ map.removeLayer(layer); }catch(e){ console.warn('[map] vector layer removal failed', e); }
+  }
+  function installBasemap(){
+    if(!(window.maplibregl && typeof L.maplibreGL === 'function' && hasWebGL())){ useRasterBasemap(); return; }
+    let layer = null;
+    try{
+      layer = L.maplibreGL({
+        style: CFG.VECTOR_STYLE,
+        // Leaflet shows this string; the plugin always disables MapLibre's own control.
+        attributionControl: { customAttribution: CFG.VECTOR_ATTRIBUTION },
+      });
+      layer.addTo(map);
+      const gl = layer.getMaplibreMap();
+      let loaded = false;
+      gl.once('load', ()=>{ loaded = true; });
+      gl.on('error', ev => {
+        if(loaded || basemap !== layer) return;
+        console.warn('[map] vector style failed, falling back to raster', ev && ev.error);
+        dropVectorBasemap(layer);
+        useRasterBasemap();
+      });
+      basemap = layer;
+    }catch(e){
+      console.warn('[map] vector basemap unavailable, falling back to raster', e);
+      if(layer) dropVectorBasemap(layer);
+      useRasterBasemap();
+    }
   }
 
   /* Frame the map on a region from its index.json bbox
