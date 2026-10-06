@@ -1,0 +1,17 @@
+{
+  "name": "roughroute-wasm",
+  "type": "module",
+  "description": "wasm-bindgen wrapper around roughroute-core (spec §6.3)",
+  "version": "0.1.0",
+  "license": "MIT",
+  "files": [
+    "roughroute_wasm_bg.wasm",
+    "roughroute_wasm.js",
+    "roughroute_wasm.d.ts"
+  ],
+  "main": "roughroute_wasm.js",
+  "types": "roughroute_wasm.d.ts",
+  "sideEffects": [
+    "./snippets/*"
+  ]
+}
