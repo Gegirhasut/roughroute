@@ -14,6 +14,23 @@ OSM extract is a separate ahead-of-time step.
 **Website / live demo:** https://gegirhasut.github.io/roughroute/ (source:
 `design-gh-page/index.html`, published via GitHub Pages, 9 languages).
 
+## Engineering highlights
+
+- **One Rust core, three integration paths:** CLI, WebAssembly and native
+  Kotlin bindings through UniFFI; routing consumes graph bytes without runtime I/O.
+- **OSM preprocessing and compact graphs:** a separate builder collapses degree-2
+  chains, preserves their geometry and delta-encodes it in a versioned binary format.
+- **Routing and reliability:** A* search, edge snapping, deterministic tie-breaking,
+  property and golden tests, and explicit errors for unsupported graph versions.
+- **Performance work with evidence:** memory layout and preprocessing trade-offs are
+  documented in [D23](docs/DECISIONS.md).
+  The measurements below are historical results for the stated inputs and build
+  conditions, not a throughput or latency guarantee for other hardware.
+
+This is approximate route generation for applications such as route playback.
+It deliberately omits traffic rules and must not be presented as a navigation engine
+that guarantees legal driving routes.
+
 ## Geodata attribution
 
 Map data **© OpenStreetMap contributors**, licensed under the
@@ -25,7 +42,7 @@ Code license: MIT.
 
 ## Build
 
-The Cargo workspace root is this directory (`app/`). The toolchain is pinned
+The Cargo workspace root is this repository directory. The toolchain is pinned
 in `rust-toolchain.toml` (currently 1.96.1), which `rustup` installs
 automatically — local dev and CI build with the same rustc. The dependency
 tree's MSRV floor is **1.88** (`osmpbf`/`home` require it); older toolchains
@@ -275,9 +292,9 @@ runner disk stays flat no matter how many regions the manifest holds.
 > Germany (4.79 GB) and France (5.04 GB) are in the manifest as the
 > big-country proof; the size gate is 6 GB (`HARD_MAX_PBF_BYTES`, raised
 > deliberately per D17/D24 — it still refuses continent/planet extracts,
-> which remain out of scope). All-Russia is excluded for a non-RAM reason:
-> its extract crosses the antimeridian, which the builder refuses by
-> design (see Known limitations).
+> which remain out of scope). Antimeridian-crossing data is supported since D25 (see Known limitations);
+> that support does not by itself establish that an all-Russia extract has been
+> built successfully within the runner's resource limits.
 
 ### Publishing (manual)
 
